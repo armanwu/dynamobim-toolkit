@@ -1,0 +1,149 @@
+{
+  "Uuid": "16b4ccbf-03f3-4b39-839d-7bf4c9830e18",
+  "IsCustomNode": false,
+  "Description": "",
+  "Name": "str-columns-split-by-level",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "# Dynamo Python (CPython3) - Split Multi-Story Structural Columns into per-Level segments\r\n# IN[0] : DeleteOriginal (bool)\r\n# IN[1] : SkipIfAlreadySplit (bool) - if True, skip columns whose Comments contains TagString\r\n# IN[2] : TagString (string) - marker written to new columns' Comments\r\n\r\nimport clr\r\n\r\nclr.AddReference(\"RevitServices\")\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\nclr.AddReference(\"RevitAPI\")\r\nfrom Autodesk.Revit.DB import (\r\n    FilteredElementCollector, BuiltInCategory, BuiltInParameter,\r\n    ElementId, XYZ, Level, FamilyInstance, Line, ElementTransformUtils\r\n)\r\nfrom Autodesk.Revit.DB.Structure import StructuralType\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\n\r\n# Inputs\r\ndelete_original = bool(IN[0]) if len(IN) > 0 and IN[0] is not None else False\r\nskip_if_tagged  = bool(IN[1]) if len(IN) > 1 and IN[1] is not None else True\r\ntag_string      = str(IN[2]) if len(IN) > 2 and IN[2] is not None else \"SPLIT_BY_DYNAMO\"\r\n\r\nTOL = 1e-6  # feet tolerance\r\n\r\ndef get_param_double(e, bip, default=0.0):\r\n    p = e.get_Parameter(bip)\r\n    return p.AsDouble() if p else default\r\n\r\ndef get_param_eid(e, bip):\r\n    p = e.get_Parameter(bip)\r\n    return p.AsElementId() if p else ElementId.InvalidElementId\r\n\r\ndef set_param_double(e, bip, val):\r\n    p = e.get_Parameter(bip)\r\n    if p and (not p.IsReadOnly):\r\n        p.Set(val)\r\n\r\ndef set_param_eid(e, bip, eid):\r\n    p = e.get_Parameter(bip)\r\n    if p and (not p.IsReadOnly):\r\n        p.Set(eid)\r\n\r\ndef get_comments(e):\r\n    p = e.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)\r\n    return p.AsString() if p else None\r\n\r\ndef set_comments(e, s):\r\n    p = e.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS)\r\n    if p and (not p.IsReadOnly):\r\n        p.Set(s)\r\n\r\ndef normalize_angle(a):\r\n    import math\r\n    twopi = 2.0 * math.pi\r\n    while a < 0: a += twopi\r\n    while a >= twopi: a -= twopi\r\n    return a\r\n\r\n# Collect and sort Levels by elevation\r\nlevels = list(FilteredElementCollector(doc).OfClass(Level).ToElements())\r\nlevels_sorted = sorted(levels, key=lambda l: l.Elevation)\r\nlevel_index = {lv.Id.IntegerValue: i for i, lv in enumerate(levels_sorted)}\r\nlevel_elev  = {lv.Id.IntegerValue: lv.Elevation for lv in levels_sorted}\r\n\r\n# Collect structural columns (instances)\r\ncols = list(\r\n    FilteredElementCollector(doc)\r\n    .OfCategory(BuiltInCategory.OST_StructuralColumns)\r\n    .WhereElementIsNotElementType()\r\n    .ToElements()\r\n)\r\n\r\ncreated_ids = []\r\nprocessed_split = 0\r\nskipped = []\r\n\r\nTransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\nfor c in cols:\r\n    try:\r\n        if not isinstance(c, FamilyInstance):\r\n            skipped.append((c.Id.IntegerValue, \"Not a FamilyInstance\"))\r\n            continue\r\n\r\n        # Anti-dup: skip if already tagged\r\n        if skip_if_tagged:\r\n            comm = get_comments(c) or \"\"\r\n            if tag_string and (tag_string in comm):\r\n                skipped.append((c.Id.IntegerValue, \"Already tagged (skipped)\"))\r\n                continue\r\n\r\n        # Only vertical columns with LocationPoint\r\n        loc = c.Location\r\n        pt = getattr(loc, \"Point\", None)\r\n        if pt is None:\r\n            skipped.append((c.Id.IntegerValue, \"No LocationPoint (slanted/curve?)\"))\r\n            continue\r\n\r\n        symbol = c.Symbol\r\n        if symbol is None:\r\n            skipped.append((c.Id.IntegerValue, \"No Symbol\"))\r\n            continue\r\n\r\n        base_lvl_id = get_param_eid(c, BuiltInParameter.FAMILY_BASE_LEVEL_PARAM)\r\n        top_lvl_id  = get_param_eid(c, BuiltInParameter.FAMILY_TOP_LEVEL_PARAM)\r\n\r\n        if base_lvl_id == ElementId.InvalidElementId or top_lvl_id == ElementId.InvalidElementId:\r\n            skipped.append((c.Id.IntegerValue, \"Missing base/top level\"))\r\n            continue\r\n\r\n        base_i = level_index.get(base_lvl_id.IntegerValue, None)\r\n        top_i  = level_index.get(top_lvl_id.IntegerValue, None)\r\n        if base_i is None or top_i is None:\r\n            skipped.append((c.Id.IntegerValue, \"Base/Top not found in level list\"))\r\n            continue\r\n\r\n        # If adjacent (or same) levels: nothing to split\r\n        if top_i <= base_i + 1:\r\n            continue\r\n\r\n        base_off = get_param_double(c, BuiltInParameter.FAMILY_BASE_LEVEL_OFFSET_PARAM, 0.0)\r\n        top_off  = get_param_double(c, BuiltInParameter.FAMILY_TOP_LEVEL_OFFSET_PARAM, 0.0)\r\n\r\n        # Absolute base/top elevations (used only to preserve offsets correctly)\r\n        z_base = level_elev[base_lvl_id.IntegerValue] + base_off\r\n        z_top  = level_elev[top_lvl_id.IntegerValue]  + top_off\r\n        if z_top <= z_base + TOL:\r\n            skipped.append((c.Id.IntegerValue, \"Non-positive height\"))\r\n            continue\r\n\r\n        base_level = doc.GetElement(base_lvl_id)\r\n        top_level  = doc.GetElement(top_lvl_id)\r\n\r\n        between_levels = levels_sorted[base_i + 1 : top_i]  # ALL levels between base and top by index\r\n        split_levels = [base_level] + between_levels + [top_level]\r\n\r\n        # Keep rotation\r\n        rot = 0.0\r\n        try:\r\n            rot = normalize_angle(loc.Rotation)\r\n        except:\r\n            rot = 0.0\r\n\r\n        # Create per-level segments\r\n        for i in range(len(split_levels) - 1):\r\n            lv_b = split_levels[i]\r\n            lv_t = split_levels[i + 1]\r\n\r\n            # preserve original absolute offsets only at ends\r\n            seg_base_off = (z_base - lv_b.Elevation) if i == 0 else 0.0\r\n            seg_top_off  = (z_top  - lv_t.Elevation) if i == (len(split_levels) - 2) else 0.0\r\n\r\n            new_col = doc.Create.NewFamilyInstance(pt, symbol, lv_b, StructuralType.Column)\r\n\r\n            # rotate around vertical axis through point\r\n            if abs(rot) > 1e-9:\r\n                axis = Line.CreateUnbound(pt, XYZ.BasisZ)\r\n                ElementTransformUtils.RotateElement(doc, new_col.Id, axis, rot)\r\n\r\n            # set constraints\r\n            set_param_eid(new_col, BuiltInParameter.FAMILY_BASE_LEVEL_PARAM, lv_b.Id)\r\n            set_param_double(new_col, BuiltInParameter.FAMILY_BASE_LEVEL_OFFSET_PARAM, seg_base_off)\r\n\r\n            set_param_eid(new_col, BuiltInParameter.FAMILY_TOP_LEVEL_PARAM, lv_t.Id)\r\n            set_param_double(new_col, BuiltInParameter.FAMILY_TOP_LEVEL_OFFSET_PARAM, seg_top_off)\r\n\r\n            # tag to prevent duplicate creation on rerun\r\n            if tag_string:\r\n                prev = get_comments(new_col) or \"\"\r\n                new_val = (prev + \" | \" + tag_string).strip(\" |\") if prev else tag_string\r\n                set_comments(new_col, new_val)\r\n\r\n            created_ids.append(new_col.Id.IntegerValue)\r\n\r\n        processed_split += 1\r\n\r\n        # delete original after successful creation\r\n        if delete_original:\r\n            doc.Delete(c.Id)\r\n        else:\r\n            # if not deleting, tag original too (so rerun won't duplicate)\r\n            if tag_string:\r\n                prev = get_comments(c) or \"\"\r\n                new_val = (prev + \" | \" + tag_string).strip(\" |\") if prev else tag_string\r\n                set_comments(c, new_val)\r\n\r\n    except Exception as ex:\r\n        skipped.append((c.Id.IntegerValue, \"Exception: {}\".format(ex)))\r\n\r\nTransactionManager.Instance.TransactionTaskDone()\r\n\r\nOUT = {\r\n    \"delete_original\": delete_original,\r\n    \"skip_if_tagged\": skip_if_tagged,\r\n    \"tag_string\": tag_string,\r\n    \"processed_columns_split\": processed_split,\r\n    \"new_columns_created\": len(created_ids),\r\n    \"created_element_ids\": created_ids[:200],  # limit output size\r\n    \"skipped_count\": len(skipped),\r\n    \"skipped_sample\": skipped[:50]\r\n}",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "7d6fd493a4cb48ba92306f028d17f8ab",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "d985823a65844f55a61b340c222215f7",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "9c1c5dba0fa94bfb9f9c24825a31e0f0",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "Id": "3f365d5511a54b42b2d030197cd04054",
+      "NodeType": "BooleanInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "e37460b597804bc994ba53a6c1844509",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Enables selection between True and False",
+      "InputValue": true
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "e37460b597804bc994ba53a6c1844509",
+      "End": "d985823a65844f55a61b340c222215f7",
+      "Id": "eacef3779d954c40991fc664ae64273f",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": null,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "3.3",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "8.2",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "3.3.0.6316",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "7d6fd493a4cb48ba92306f028d17f8ab",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 196.10376241422108,
+        "Y": 70.83325169298551
+      },
+      {
+        "Id": "3f365d5511a54b42b2d030197cd04054",
+        "Name": "Boolean",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": -47.605496887461186,
+        "Y": 70.90496106967484
+      }
+    ],
+    "Annotations": [],
+    "X": 136.67949293673564,
+    "Y": 70.28627039439425,
+    "Zoom": 1.5907768970610707
+  }
+}
