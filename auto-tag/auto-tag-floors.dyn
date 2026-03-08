@@ -1,0 +1,166 @@
+{
+  "Uuid": "69cea7ff-e8b0-4aa8-aadc-84136171cb45",
+  "IsCustomNode": false,
+  "Description": "",
+  "Name": "auto-tag-floors",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [
+    {
+      "Id": "5be2bbf99b034bd5bb14d80037be9d86",
+      "Name": "Boolean",
+      "Type": "boolean",
+      "Type2": "boolean",
+      "Value": "true",
+      "Description": "Enables selection between True and False"
+    }
+  ],
+  "Outputs": [
+    {
+      "Id": "da1a71cf92e0467ab35a8e50b6fd4031",
+      "Name": "Python Script",
+      "Type": "unknown",
+      "InitialValue": "",
+      "Description": "Runs an embedded Python script."
+    }
+  ],
+  "Nodes": [
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "Id": "5be2bbf99b034bd5bb14d80037be9d86",
+      "NodeType": "BooleanInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "634e2d0383834d2ca2212f8a1f8b168c",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Enables selection between True and False",
+      "InputValue": true
+    },
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "# IN[0] = run trigger (boolean)\r\n\r\nimport clr\r\n\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import *\r\n\r\nclr.AddReference('RevitServices')\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\nview = doc.ActiveView\r\nrunIt = IN[0]\r\n\r\ndef get_floor_center(floor, view):\r\n    bbox = floor.get_BoundingBox(view)\r\n    if bbox:\r\n        return XYZ(\r\n            (bbox.Min.X + bbox.Max.X) / 2.0,\r\n            (bbox.Min.Y + bbox.Max.Y) / 2.0,\r\n            (bbox.Min.Z + bbox.Max.Z) / 2.0\r\n        )\r\n    return None\r\n\r\ndef get_existing_tagged_floor_ids(doc, view):\r\n    tagged_ids = set()\r\n\r\n    tags = FilteredElementCollector(doc, view.Id) \\\r\n        .OfClass(IndependentTag) \\\r\n        .ToElements()\r\n\r\n    for tag in tags:\r\n        try:\r\n            if tag.Category is None:\r\n                continue\r\n            if tag.Category.Id.IntegerValue != int(BuiltInCategory.OST_FloorTags):\r\n                continue\r\n\r\n            try:\r\n                ids = tag.GetTaggedLocalElementIds()\r\n                if ids:\r\n                    for eid in ids:\r\n                        tagged_ids.add(eid.IntegerValue)\r\n                    continue\r\n            except:\r\n                pass\r\n\r\n            try:\r\n                eid = tag.TaggedLocalElementId\r\n                if eid and eid.IntegerValue > 0:\r\n                    tagged_ids.add(eid.IntegerValue)\r\n                    continue\r\n            except:\r\n                pass\r\n\r\n            try:\r\n                ref = tag.GetTaggedReference()\r\n                if ref and ref.ElementId.IntegerValue > 0:\r\n                    tagged_ids.add(ref.ElementId.IntegerValue)\r\n                    continue\r\n            except:\r\n                pass\r\n\r\n        except:\r\n            pass\r\n\r\n    return tagged_ids\r\n\r\nif not runIt:\r\n    OUT = \"Set Boolean ke True untuk menjalankan script.\", [], [], []\r\nelse:\r\n    invalid_view_types = [\r\n        ViewType.ThreeD,\r\n        ViewType.Schedule,\r\n        ViewType.DrawingSheet,\r\n        ViewType.ProjectBrowser,\r\n        ViewType.SystemBrowser,\r\n        ViewType.Report,\r\n        ViewType.CostReport,\r\n        ViewType.LoadsReport,\r\n        ViewType.PresureLossReport,\r\n        ViewType.ColumnSchedule,\r\n        ViewType.PanelSchedule\r\n    ]\r\n\r\n    if view.ViewType in invalid_view_types:\r\n        OUT = [], [], [], [\"Active view tidak mendukung tagging floor. Gunakan Floor Plan / Section / Elevation.\"]\r\n    else:\r\n        tagType = FilteredElementCollector(doc) \\\r\n            .OfClass(FamilySymbol) \\\r\n            .OfCategory(BuiltInCategory.OST_FloorTags) \\\r\n            .FirstElement()\r\n\r\n        if tagType is None:\r\n            OUT = [], [], [], [\"Tidak ditemukan Floor Tag di project. Load Floor Tag family dulu.\"]\r\n        else:\r\n            floors = list(\r\n                FilteredElementCollector(doc, view.Id)\r\n                .OfCategory(BuiltInCategory.OST_Floors)\r\n                .WhereElementIsNotElementType()\r\n                .ToElements()\r\n            )\r\n\r\n            existing_tagged_ids = get_existing_tagged_floor_ids(doc, view)\r\n\r\n            created = []\r\n            skipped = []\r\n            errors = []\r\n\r\n            TransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\n            try:\r\n                if not tagType.IsActive:\r\n                    tagType.Activate()\r\n                    doc.Regenerate()\r\n\r\n                for floor in floors:\r\n                    try:\r\n                        if floor is None:\r\n                            continue\r\n\r\n                        fid = floor.Id.IntegerValue\r\n\r\n                        if fid in existing_tagged_ids:\r\n                            skipped.append(fid)\r\n                            continue\r\n\r\n                        pt = get_floor_center(floor, view)\r\n                        if pt is None:\r\n                            errors.append(\"Floor ID {} tidak punya titik yang valid.\".format(fid))\r\n                            continue\r\n\r\n                        tag = IndependentTag.Create(\r\n                            doc,\r\n                            view.Id,\r\n                            Reference(floor),\r\n                            False,\r\n                            TagMode.TM_ADDBY_CATEGORY,\r\n                            TagOrientation.Horizontal,\r\n                            pt\r\n                        )\r\n\r\n                        tag.HasLeader = False\r\n                        created.append(fid)\r\n\r\n                    except Exception as e:\r\n                        try:\r\n                            fid = floor.Id.IntegerValue\r\n                        except:\r\n                            fid = \"Unknown\"\r\n                        errors.append(\"Floor ID {} gagal: {}\".format(fid, str(e)))\r\n\r\n            finally:\r\n                TransactionManager.Instance.TransactionTaskDone()\r\n\r\n            OUT = created, skipped, list(existing_tagged_ids), errors",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "da1a71cf92e0467ab35a8e50b6fd4031",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "7f6502cf0acc4e3391286b2ca0d2b50e",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "8798c0a2aa09480f86aa27acc2c70725",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "634e2d0383834d2ca2212f8a1f8b168c",
+      "End": "7f6502cf0acc4e3391286b2ca0d2b50e",
+      "Id": "62fbef24faa64e1e845948edb35ca7ba",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": true,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "3.3",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "8.2",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "3.3.0.6316",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "5be2bbf99b034bd5bb14d80037be9d86",
+        "Name": "Boolean",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 405.0,
+        "Y": 416.0
+      },
+      {
+        "Id": "da1a71cf92e0467ab35a8e50b6fd4031",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": true,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 681.0,
+        "Y": 414.0
+      }
+    ],
+    "Annotations": [],
+    "X": 0.0,
+    "Y": 0.0,
+    "Zoom": 1.0
+  }
+}

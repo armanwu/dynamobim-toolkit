@@ -1,0 +1,213 @@
+{
+  "Uuid": "86bb5b7c-7d2b-49c6-ad8b-1bcf56bb50c7",
+  "IsCustomNode": false,
+  "Description": "",
+  "Name": "asal",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [
+    {
+      "Id": "8bb040626d9e49faac36bc7133f28ec8",
+      "Name": "Boolean",
+      "Type": "boolean",
+      "Type2": "boolean",
+      "Value": "true",
+      "Description": "Enables selection between True and False"
+    }
+  ],
+  "Outputs": [
+    {
+      "Id": "9cbbf6551876469cab6ba4d94ac1a4a3",
+      "Name": "Python Script",
+      "Type": "unknown",
+      "InitialValue": "",
+      "Description": "Runs an embedded Python script."
+    }
+  ],
+  "Nodes": [
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "# IN[0] = run trigger (boolean)\r\n\r\nimport clr\r\n\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import *\r\n\r\nclr.AddReference('RevitServices')\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\nview = doc.ActiveView\r\nrunIt = IN[0]\r\n\r\ndef get_door_center(door, view):\r\n    bbox = door.get_BoundingBox(view)\r\n    if bbox:\r\n        return XYZ(\r\n            (bbox.Min.X + bbox.Max.X) / 2.0,\r\n            (bbox.Min.Y + bbox.Max.Y) / 2.0,\r\n            (bbox.Min.Z + bbox.Max.Z) / 2.0\r\n        )\r\n\r\n    loc = door.Location\r\n    if isinstance(loc, LocationPoint):\r\n        return loc.Point\r\n\r\n    if isinstance(loc, LocationCurve):\r\n        return loc.Curve.Evaluate(0.5, True)\r\n\r\n    return None\r\n\r\ndef get_existing_tagged_door_ids(doc, view):\r\n    tagged_ids = set()\r\n\r\n    tags = FilteredElementCollector(doc, view.Id) \\\r\n        .OfClass(IndependentTag) \\\r\n        .ToElements()\r\n\r\n    for tag in tags:\r\n        try:\r\n            # hanya proses door tag\r\n            if tag.Category is None:\r\n                continue\r\n            if tag.Category.Id.IntegerValue != int(BuiltInCategory.OST_DoorTags):\r\n                continue\r\n\r\n            # Revit version bisa beda-beda, jadi dicoba beberapa cara\r\n            try:\r\n                ids = tag.GetTaggedLocalElementIds()\r\n                if ids:\r\n                    for eid in ids:\r\n                        tagged_ids.add(eid.IntegerValue)\r\n                    continue\r\n            except:\r\n                pass\r\n\r\n            try:\r\n                eid = tag.TaggedLocalElementId\r\n                if eid and eid.IntegerValue > 0:\r\n                    tagged_ids.add(eid.IntegerValue)\r\n                    continue\r\n            except:\r\n                pass\r\n\r\n            try:\r\n                ref = tag.GetTaggedReference()\r\n                if ref and ref.ElementId.IntegerValue > 0:\r\n                    tagged_ids.add(ref.ElementId.IntegerValue)\r\n                    continue\r\n            except:\r\n                pass\r\n\r\n        except:\r\n            pass\r\n\r\n    return tagged_ids\r\n\r\nif not runIt:\r\n    OUT = \"Set Boolean ke True untuk menjalankan script.\", [], [], []\r\nelse:\r\n    invalid_view_types = [\r\n        ViewType.ThreeD,\r\n        ViewType.Schedule,\r\n        ViewType.DrawingSheet,\r\n        ViewType.ProjectBrowser,\r\n        ViewType.SystemBrowser,\r\n        ViewType.Report,\r\n        ViewType.CostReport,\r\n        ViewType.LoadsReport,\r\n        ViewType.PresureLossReport,\r\n        ViewType.ColumnSchedule,\r\n        ViewType.PanelSchedule\r\n    ]\r\n\r\n    if view.ViewType in invalid_view_types:\r\n        OUT = [], [], [], [\"Active view tidak mendukung tagging door. Gunakan Floor Plan / Ceiling Plan / Section / Elevation.\"]\r\n    else:\r\n        tagType = FilteredElementCollector(doc) \\\r\n            .OfClass(FamilySymbol) \\\r\n            .OfCategory(BuiltInCategory.OST_DoorTags) \\\r\n            .FirstElement()\r\n\r\n        if tagType is None:\r\n            OUT = [], [], [], [\"Tidak ditemukan Door Tag di project. Load Door Tag family dulu.\"]\r\n        else:\r\n            # semua door yang terlihat pada active view\r\n            doors = list(\r\n                FilteredElementCollector(doc, view.Id)\r\n                .OfCategory(BuiltInCategory.OST_Doors)\r\n                .WhereElementIsNotElementType()\r\n                .ToElements()\r\n            )\r\n\r\n            existing_tagged_ids = get_existing_tagged_door_ids(doc, view)\r\n\r\n            created = []\r\n            skipped = []\r\n            errors = []\r\n\r\n            TransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\n            try:\r\n                if not tagType.IsActive:\r\n                    tagType.Activate()\r\n                    doc.Regenerate()\r\n\r\n                for door in doors:\r\n                    try:\r\n                        if door is None:\r\n                            continue\r\n\r\n                        did = door.Id.IntegerValue\r\n\r\n                        # kalau sudah ada tag, skip\r\n                        if did in existing_tagged_ids:\r\n                            skipped.append(did)\r\n                            continue\r\n\r\n                        pt = get_door_center(door, view)\r\n                        if pt is None:\r\n                            errors.append(\"Door ID {} tidak punya titik yang valid.\".format(did))\r\n                            continue\r\n\r\n                        tag = IndependentTag.Create(\r\n                            doc,\r\n                            view.Id,\r\n                            Reference(door),\r\n                            False,  # no leader\r\n                            TagMode.TM_ADDBY_CATEGORY,\r\n                            TagOrientation.Horizontal,\r\n                            pt\r\n                        )\r\n\r\n                        tag.HasLeader = False\r\n                        created.append(did)\r\n\r\n                    except Exception as e:\r\n                        try:\r\n                            did = door.Id.IntegerValue\r\n                        except:\r\n                            did = \"Unknown\"\r\n                        errors.append(\"Door ID {} gagal: {}\".format(did, str(e)))\r\n\r\n            finally:\r\n                TransactionManager.Instance.TransactionTaskDone()\r\n\r\n            OUT = created, skipped, list(existing_tagged_ids), errors",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "9cbbf6551876469cab6ba4d94ac1a4a3",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "4eaf8f92ef0d411d9fbc6afd5651bba3",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "8646c32d3a4b4ebfbb79341091f977e0",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Watch, CoreNodeModels",
+      "WatchWidth": 200.0,
+      "WatchHeight": 200.0,
+      "Id": "9b9e126b64e9449589f3ad0e564f56f5",
+      "NodeType": "ExtensionNode",
+      "Inputs": [
+        {
+          "Id": "f2a1323556ce47ac892d77e382a1fa5c",
+          "Name": "",
+          "Description": "Node to show output from",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "087c54ac71e84d4ab7c1cb1493de6a89",
+          "Name": "",
+          "Description": "Node output",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Visualizes a node's output"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "Id": "8bb040626d9e49faac36bc7133f28ec8",
+      "NodeType": "BooleanInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "79d9171dd5964e059452c5da80b984ff",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Enables selection between True and False",
+      "InputValue": true
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "8646c32d3a4b4ebfbb79341091f977e0",
+      "End": "f2a1323556ce47ac892d77e382a1fa5c",
+      "Id": "02dcfebf1ad240fc8067b94d10f27c2e",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "79d9171dd5964e059452c5da80b984ff",
+      "End": "4eaf8f92ef0d411d9fbc6afd5651bba3",
+      "Id": "5e014abf6e6a4078970c17b62320018b",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": true,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "3.3",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "8.2",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "3.3.0.6316",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "9cbbf6551876469cab6ba4d94ac1a4a3",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": true,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 694.2071855615856,
+        "Y": 357.4146352615704
+      },
+      {
+        "Id": "9b9e126b64e9449589f3ad0e564f56f5",
+        "Name": "Watch",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 904.4506388117582,
+        "Y": 358.6369809200017
+      },
+      {
+        "Id": "8bb040626d9e49faac36bc7133f28ec8",
+        "Name": "Boolean",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 468.07323875180714,
+        "Y": 356.1922896031393
+      }
+    ],
+    "Annotations": [],
+    "X": -273.93034014006685,
+    "Y": -84.40062563013328,
+    "Zoom": 0.8180991956754727
+  }
+}
