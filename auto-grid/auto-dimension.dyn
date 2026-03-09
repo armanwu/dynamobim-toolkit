@@ -1,0 +1,196 @@
+{
+  "Uuid": "cbe23240-67d9-450a-82fc-8fd1a1c293ba",
+  "IsCustomNode": false,
+  "Description": "",
+  "Name": "auto-dimension",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "CoreNodeModels.Input.DoubleInput, CoreNodeModels",
+      "NumberType": "Double",
+      "Id": "209d527c81a840c5842d9ce3235a19cf",
+      "NodeType": "NumberInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "8fe41bbfef01421588b08207e51eae01",
+          "Name": "",
+          "Description": "Double",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Creates a number",
+      "InputValue": -500.0
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.DoubleInput, CoreNodeModels",
+      "NumberType": "Double",
+      "Id": "6fa3858bbb8641d099f0ef2e5dc0769a",
+      "NodeType": "NumberInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "2fb87a7b57bd4736aa387f91f3624f28",
+          "Name": "",
+          "Description": "Double",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Creates a number",
+      "InputValue": -500.0
+    },
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "import clr\r\n\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import *\r\n\r\nclr.AddReference('RevitServices')\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\nview = doc.ActiveView\r\n\r\n# =========================\r\n# INPUT\r\n# =========================\r\noffset_bottom_mm = IN[0] if IN[0] is not None else 2000\r\noffset_left_mm   = IN[1] if IN[1] is not None else 2000\r\n\r\ndef mm_to_ft(mm):\r\n    return float(mm) / 304.8\r\n\r\noffset_bottom = mm_to_ft(offset_bottom_mm)\r\noffset_left   = mm_to_ft(offset_left_mm)\r\n\r\n# =========================\r\n# COLLECT STRAIGHT GRIDS\r\n# =========================\r\nall_grids = FilteredElementCollector(doc, view.Id)\\\r\n    .OfClass(Grid)\\\r\n    .WhereElementIsNotElementType()\\\r\n    .ToElements()\r\n\r\nstraight_grids = []\r\nfor g in all_grids:\r\n    try:\r\n        c = g.Curve\r\n        if isinstance(c, Line):\r\n            straight_grids.append(g)\r\n    except:\r\n        pass\r\n\r\n# =========================\r\n# SPLIT VERTICAL / HORIZONTAL\r\n# vertical grid   = line direction mostly Y\r\n# horizontal grid = line direction mostly X\r\n# =========================\r\nvertical_grids = []\r\nhorizontal_grids = []\r\n\r\nfor g in straight_grids:\r\n    line = g.Curve\r\n    d = line.Direction\r\n\r\n    if abs(d.Y) > abs(d.X):\r\n        vertical_grids.append(g)\r\n    else:\r\n        horizontal_grids.append(g)\r\n\r\n# =========================\r\n# HELPERS\r\n# =========================\r\ndef get_endpoints(grid):\r\n    c = grid.Curve\r\n    return c.GetEndPoint(0), c.GetEndPoint(1)\r\n\r\ndef grid_mid_x(grid):\r\n    p1, p2 = get_endpoints(grid)\r\n    return (p1.X + p2.X) / 2.0\r\n\r\ndef grid_mid_y(grid):\r\n    p1, p2 = get_endpoints(grid)\r\n    return (p1.Y + p2.Y) / 2.0\r\n\r\ndef make_reference_array(grids):\r\n    ra = ReferenceArray()\r\n    for g in grids:\r\n        ra.Append(Reference(g))\r\n    return ra\r\n\r\n# urutkan grid\r\nvertical_grids = sorted(vertical_grids, key=lambda g: grid_mid_x(g))\r\nhorizontal_grids = sorted(horizontal_grids, key=lambda g: grid_mid_y(g))\r\n\r\ncreated_dims = []\r\nmessages = []\r\n\r\nTransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\n# =========================\r\n# DIMENSION FOR VERTICAL GRIDS\r\n# placed at the very bottom\r\n# =========================\r\ntry:\r\n    if len(vertical_grids) >= 2:\r\n        x_vals = []\r\n        y_vals = []\r\n\r\n        for g in vertical_grids:\r\n            p1, p2 = get_endpoints(g)\r\n            x_vals.append((p1.X + p2.X) / 2.0)\r\n            y_vals.extend([p1.Y, p2.Y])\r\n\r\n        x_min = min(x_vals)\r\n        x_max = max(x_vals)\r\n        y_bottom = min(y_vals) - offset_bottom\r\n\r\n        dim_line = Line.CreateBound(\r\n            XYZ(x_min, y_bottom, 0),\r\n            XYZ(x_max, y_bottom, 0)\r\n        )\r\n\r\n        ref_array = make_reference_array(vertical_grids)\r\n        dim = doc.Create.NewDimension(view, dim_line, ref_array)\r\n        created_dims.append(dim)\r\n        messages.append(\"Dimensi grid vertikal dibuat di paling bawah.\")\r\n    else:\r\n        messages.append(\"Grid vertikal kurang dari 2.\")\r\nexcept Exception as e:\r\n    messages.append(\"Gagal membuat dimensi grid vertikal: {}\".format(str(e)))\r\n\r\n# =========================\r\n# DIMENSION FOR HORIZONTAL GRIDS\r\n# placed at the very left\r\n# =========================\r\ntry:\r\n    if len(horizontal_grids) >= 2:\r\n        x_vals = []\r\n        y_vals = []\r\n\r\n        for g in horizontal_grids:\r\n            p1, p2 = get_endpoints(g)\r\n            x_vals.extend([p1.X, p2.X])\r\n            y_vals.append((p1.Y + p2.Y) / 2.0)\r\n\r\n        x_left = min(x_vals) - offset_left\r\n        y_min = min(y_vals)\r\n        y_max = max(y_vals)\r\n\r\n        dim_line = Line.CreateBound(\r\n            XYZ(x_left, y_min, 0),\r\n            XYZ(x_left, y_max, 0)\r\n        )\r\n\r\n        ref_array = make_reference_array(horizontal_grids)\r\n        dim = doc.Create.NewDimension(view, dim_line, ref_array)\r\n        created_dims.append(dim)\r\n        messages.append(\"Dimensi grid horizontal dibuat di paling kiri.\")\r\n    else:\r\n        messages.append(\"Grid horizontal kurang dari 2.\")\r\nexcept Exception as e:\r\n    messages.append(\"Gagal membuat dimensi grid horizontal: {}\".format(str(e)))\r\n\r\nTransactionManager.Instance.TransactionTaskDone()\r\n\r\nOUT = created_dims, messages",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "5b851e3b4e244cc8b66220a5a76790ef",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "1de18cf852e04733a42e044fd477eb41",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "ffc673c6588c417c8be27abd3036e71c",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "be77c568e3314f5bab2e783b4987010d",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "8fe41bbfef01421588b08207e51eae01",
+      "End": "1de18cf852e04733a42e044fd477eb41",
+      "Id": "76e16cf231cd4665b309485a3ef94046",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "2fb87a7b57bd4736aa387f91f3624f28",
+      "End": "ffc673c6588c417c8be27abd3036e71c",
+      "Id": "0885a6010002418f810b42f25608556b",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": null,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "3.3",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "8.2",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "3.3.0.6316",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "209d527c81a840c5842d9ce3235a19cf",
+        "Name": "Number",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 360.0,
+        "Y": 364.0
+      },
+      {
+        "Id": "6fa3858bbb8641d099f0ef2e5dc0769a",
+        "Name": "Number",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 363.0,
+        "Y": 510.0
+      },
+      {
+        "Id": "5b851e3b4e244cc8b66220a5a76790ef",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 563.0,
+        "Y": 406.0
+      }
+    ],
+    "Annotations": [],
+    "X": 0.0,
+    "Y": 0.0,
+    "Zoom": 1.0
+  }
+}

@@ -2,7 +2,7 @@
   "Uuid": "454de1f1-3c41-4dce-9412-30f974874842",
   "IsCustomNode": false,
   "Description": "",
-  "Name": "Ngasal",
+  "Name": "auto-grid",
   "ElementResolver": {
     "ResolutionMap": {}
   },
@@ -24,13 +24,22 @@
       "Value": "8",
       "NumberType": "Double",
       "Description": "Creates a number"
+    },
+    {
+      "Id": "38a120096ea340c89d11f21088934ee7",
+      "Name": "Bubble Offset",
+      "Type": "number",
+      "Type2": "number",
+      "Value": "4",
+      "NumberType": "Double",
+      "Description": "Creates a number"
     }
   ],
   "Outputs": [],
   "Nodes": [
     {
       "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
-      "Code": "import clr\r\n\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import *\r\n\r\nclr.AddReference('RevitServices')\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\n\r\n# Input\r\nlength_x = IN[0]\r\nlength_y = IN[1]\r\nspacing_x = IN[2]\r\nspacing_y = IN[3]\r\n\r\n# Konversi meter ke feet\r\ndef m_to_ft(m):\r\n    return m / 0.3048\r\n\r\nlength_x_ft = m_to_ft(length_x)\r\nlength_y_ft = m_to_ft(length_y)\r\nspacing_x_ft = m_to_ft(spacing_x)\r\nspacing_y_ft = m_to_ft(spacing_y)\r\n\r\n# Buat daftar posisi grid\r\ndef generate_positions(total_length, spacing):\r\n    positions = []\r\n    current = 0.0\r\n    while current <= total_length + 0.0001:\r\n        positions.append(current)\r\n        current += spacing\r\n    return positions\r\n\r\nx_positions = generate_positions(length_x_ft, spacing_x_ft)\r\ny_positions = generate_positions(length_y_ft, spacing_y_ft)\r\n\r\ncreated_grids = []\r\n\r\nTransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\n# Grid vertikal (nama angka)\r\nfor i, x in enumerate(x_positions):\r\n    line = Line.CreateBound(XYZ(x, 0, 0), XYZ(x, length_y_ft, 0))\r\n    grid = Grid.Create(doc, line)\r\n    grid.Name = str(i + 1)\r\n    created_grids.append(grid)\r\n\r\n# Grid horizontal (nama huruf)\r\nfor i, y in enumerate(y_positions):\r\n    line = Line.CreateBound(XYZ(0, y, 0), XYZ(length_x_ft, y, 0))\r\n    grid = Grid.Create(doc, line)\r\n    grid.Name = chr(65 + i)  # A, B, C, ...\r\n    created_grids.append(grid)\r\n\r\nTransactionManager.Instance.TransactionTaskDone()\r\n\r\nOUT = created_grids",
+      "Code": "import clr\r\n\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import *\r\n\r\nclr.AddReference('RevitServices')\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\n\r\n# Input\r\nlength_x = IN[0]\r\nlength_y = IN[1]\r\nspacing_x = IN[2]\r\nspacing_y = IN[3]\r\nbubble_offset = IN[4] if len(IN) > 4 and IN[4] is not None else 1.0  # meter\r\n\r\n# Konversi meter ke feet\r\ndef m_to_ft(m):\r\n    return float(m) / 0.3048\r\n\r\nlength_x_ft = m_to_ft(length_x)\r\nlength_y_ft = m_to_ft(length_y)\r\nspacing_x_ft = m_to_ft(spacing_x)\r\nspacing_y_ft = m_to_ft(spacing_y)\r\nbubble_offset_ft = m_to_ft(bubble_offset)\r\n\r\n# Buat daftar posisi grid\r\ndef generate_positions(total_length, spacing):\r\n    positions = []\r\n    current = 0.0\r\n    while current <= total_length + 0.0001:\r\n        positions.append(current)\r\n        current += spacing\r\n    return positions\r\n\r\nx_positions = generate_positions(length_x_ft, spacing_x_ft)\r\ny_positions = generate_positions(length_y_ft, spacing_y_ft)\r\n\r\ncreated_grids = []\r\n\r\nTransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\n# Grid vertikal (nama angka)\r\nfor i, x in enumerate(x_positions):\r\n    line = Line.CreateBound(\r\n        XYZ(x, -bubble_offset_ft, 0),\r\n        XYZ(x, length_y_ft + bubble_offset_ft, 0)\r\n    )\r\n    grid = Grid.Create(doc, line)\r\n    grid.Name = str(i + 1)\r\n    created_grids.append(grid)\r\n\r\n# Grid horizontal (nama huruf)\r\nfor i, y in enumerate(y_positions):\r\n    line = Line.CreateBound(\r\n        XYZ(-bubble_offset_ft, y, 0),\r\n        XYZ(length_x_ft + bubble_offset_ft, y, 0)\r\n    )\r\n    grid = Grid.Create(doc, line)\r\n    grid.Name = chr(65 + i)  # A, B, C, ...\r\n    created_grids.append(grid)\r\n\r\nTransactionManager.Instance.TransactionTaskDone()\r\n\r\nOUT = created_grids",
       "Engine": "CPython3",
       "VariableInputPorts": true,
       "Id": "76f3474259fe41789efe71b5497dcc99",
@@ -67,6 +76,15 @@
           "Id": "132587ec0deb4cdfa63d8350369d19bc",
           "Name": "IN[3]",
           "Description": "Input #3",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "b81a9c5a61e1462d80032c308c67fd17",
+          "Name": "IN[4]",
+          "Description": "Input #4",
           "UsingDefaultValue": false,
           "Level": 2,
           "UseLevels": false,
@@ -128,6 +146,27 @@
       "Replication": "Disabled",
       "Description": "Creates a number",
       "InputValue": 8.0
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.DoubleInput, CoreNodeModels",
+      "NumberType": "Double",
+      "Id": "38a120096ea340c89d11f21088934ee7",
+      "NodeType": "NumberInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "484c9ed7ec6c4e559aa88f7acbebfbad",
+          "Name": "",
+          "Description": "Double",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Creates a number",
+      "InputValue": 4.0
     }
   ],
   "Connectors": [
@@ -153,6 +192,12 @@
       "Start": "71bba1205ec7407b86643d6c9f04d439",
       "End": "132587ec0deb4cdfa63d8350369d19bc",
       "Id": "9a39d09c3429435ea587757e5fdd021f",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "484c9ed7ec6c4e559aa88f7acbebfbad",
+      "End": "b81a9c5a61e1462d80032c308c67fd17",
+      "Id": "e238df171af947ccb375c0b2cd9fb9f6",
       "IsHidden": "False"
     }
   ],
@@ -235,6 +280,16 @@
         "ShowGeometry": true,
         "X": 459.0,
         "Y": 419.0
+      },
+      {
+        "Id": "38a120096ea340c89d11f21088934ee7",
+        "Name": "Bubble Offset",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 454.0,
+        "Y": 575.0
       }
     ],
     "Annotations": [],
