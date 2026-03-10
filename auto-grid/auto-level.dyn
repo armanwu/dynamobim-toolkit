@@ -1,0 +1,215 @@
+{
+  "Uuid": "fbe6cb61-5ef9-4e4a-8f60-f11040b3d552",
+  "IsCustomNode": false,
+  "Description": "",
+  "Name": "auto-level",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [
+    {
+      "Id": "81092339b0034954a884d741601228c7",
+      "Name": "Floor to Floor",
+      "Type": "number",
+      "Type2": "number",
+      "Value": "4",
+      "NumberType": "Double",
+      "Description": "Creates a number"
+    },
+    {
+      "Id": "b8544de3bf0340fdad93afcf3f411c05",
+      "Name": "Jumlah Lantai",
+      "Type": "number",
+      "Type2": "number",
+      "Value": "5",
+      "NumberType": "Double",
+      "Description": "Creates a number"
+    }
+  ],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "import clr\r\n\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import *\r\n\r\nclr.AddReference('RevitServices')\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\n\r\n# =========================\r\n# INPUT\r\n# IN[0] = floor to floor (meter)\r\n# IN[1] = jumlah lantai\r\n# =========================\r\nfloor_to_floor = IN[0] if IN[0] is not None else 4.0\r\nfloor_count = IN[1] if IN[1] is not None else 5\r\n\r\nfloor_to_floor = float(floor_to_floor)\r\nfloor_count = int(floor_count)\r\n\r\ndef m_to_ft(m):\r\n    return float(m) / 0.3048\r\n\r\nfloor_to_floor_ft = m_to_ft(floor_to_floor)\r\n\r\ncreated_levels = []\r\nfailed = []\r\n\r\nTransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\nfor i in range(floor_count):\r\n    try:\r\n        elev_ft = i * floor_to_floor_ft\r\n        level = Level.Create(doc, elev_ft)\r\n        level.Name = \"Lantai {}\".format(i + 1)\r\n        created_levels.append(level)\r\n    except Exception as e:\r\n        failed.append(\"Lantai {} gagal: {}\".format(i + 1, str(e)))\r\n\r\nTransactionManager.Instance.TransactionTaskDone()\r\n\r\nOUT = created_levels, failed",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "244e1e87364a4cc3a07fd428695dadc8",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "ec123fc384f14df987f3635b3ba65fae",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "57c704c3d53b47bfba206a021317fb9c",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "d6c821aeffd546a39ba61d414543a377",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.DoubleInput, CoreNodeModels",
+      "NumberType": "Double",
+      "Id": "81092339b0034954a884d741601228c7",
+      "NodeType": "NumberInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "7db525cbd9f644e7b01d4cccca40e452",
+          "Name": "",
+          "Description": "Double",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Creates a number",
+      "InputValue": 4.0
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.DoubleInput, CoreNodeModels",
+      "NumberType": "Double",
+      "Id": "b8544de3bf0340fdad93afcf3f411c05",
+      "NodeType": "NumberInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "3b7abd29872b4dbca190f37c42dd21dc",
+          "Name": "",
+          "Description": "Double",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Creates a number",
+      "InputValue": 5.0
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "7db525cbd9f644e7b01d4cccca40e452",
+      "End": "ec123fc384f14df987f3635b3ba65fae",
+      "Id": "c2d80436236b4f82a662522fa943527e",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "3b7abd29872b4dbca190f37c42dd21dc",
+      "End": "57c704c3d53b47bfba206a021317fb9c",
+      "Id": "83e64c27a5b84e0daed99bbcf77efccf",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": true,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "3.3",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "8.2",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "3.3.0.6316",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "244e1e87364a4cc3a07fd428695dadc8",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 797.0,
+        "Y": 412.0
+      },
+      {
+        "Id": "81092339b0034954a884d741601228c7",
+        "Name": "Floor to Floor",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 453.0,
+        "Y": 285.0
+      },
+      {
+        "Id": "b8544de3bf0340fdad93afcf3f411c05",
+        "Name": "Jumlah Lantai",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 442.0,
+        "Y": 432.0
+      }
+    ],
+    "Annotations": [],
+    "X": 0.0,
+    "Y": 0.0,
+    "Zoom": 1.0
+  }
+}
