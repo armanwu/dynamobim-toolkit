@@ -1,0 +1,305 @@
+{
+  "Uuid": "9bdc86b5-3cc7-42df-8d3d-611fb8563c0a",
+  "IsCustomNode": false,
+  "Description": "",
+  "Name": "Ngasal",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "import clr\r\nimport math\r\n\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import *\r\nfrom Autodesk.Revit.DB.Architecture import Room\r\n\r\nclr.AddReference('RevitServices')\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\n\r\ntarget_param_name = IN[0] if IN[0] else \"Comments\"\r\n\r\n# =====================================\r\n# HELPERS\r\n# =====================================\r\ndef get_room_point(room):\r\n    try:\r\n        loc = room.Location\r\n        if loc and hasattr(loc, \"Point\"):\r\n            return loc.Point\r\n    except:\r\n        pass\r\n    return None\r\n\r\ndef get_material_name(mat_id):\r\n    try:\r\n        if mat_id and mat_id != ElementId.InvalidElementId:\r\n            mat = doc.GetElement(mat_id)\r\n            if mat and mat.Name:\r\n                return mat.Name\r\n    except:\r\n        pass\r\n    return None\r\n\r\ndef normalize_xyz(v):\r\n    try:\r\n        l = math.sqrt(v.X*v.X + v.Y*v.Y + v.Z*v.Z)\r\n        if l == 0:\r\n            return None\r\n        return XYZ(v.X/l, v.Y/l, v.Z/l)\r\n    except:\r\n        return None\r\n\r\ndef dot_xyz(a, b):\r\n    return a.X*b.X + a.Y*b.Y + a.Z*b.Z\r\n\r\ndef get_wall_midpoint(wall):\r\n    try:\r\n        c = wall.Location.Curve\r\n        return c.Evaluate(0.5, True)\r\n    except:\r\n        try:\r\n            c = wall.Curve\r\n            return c.Evaluate(0.5, True)\r\n        except:\r\n            return None\r\n\r\ndef get_room_facing_side(wall, room_point):\r\n    \"\"\"\r\n    Tentukan room berada di sisi Interior atau Exterior wall.\r\n    Wall.Orientation dianggap mengarah ke sisi exterior wall.\r\n    Jika vektor dari midpoint wall ke titik room searah orientation,\r\n    berarti room ada di sisi exterior.\r\n    Kalau berlawanan, room ada di sisi interior.\r\n    \"\"\"\r\n    try:\r\n        wall_mid = get_wall_midpoint(wall)\r\n        if wall_mid is None or room_point is None:\r\n            return None\r\n\r\n        orient = normalize_xyz(wall.Orientation)\r\n        if orient is None:\r\n            return None\r\n\r\n        vec_to_room = XYZ(\r\n            room_point.X - wall_mid.X,\r\n            room_point.Y - wall_mid.Y,\r\n            0\r\n        )\r\n        vec_to_room = normalize_xyz(vec_to_room)\r\n        if vec_to_room is None:\r\n            return None\r\n\r\n        d = dot_xyz(orient, vec_to_room)\r\n\r\n        if d >= 0:\r\n            return ShellLayerType.Exterior\r\n        else:\r\n            return ShellLayerType.Interior\r\n    except:\r\n        return None\r\n\r\ndef get_finish_material_from_room_side(wall, room_point):\r\n    \"\"\"\r\n    Ambil material dari shell layer sisi wall yang menghadap room.\r\n    Prioritas:\r\n    1. shell side yang menghadap room\r\n    2. ambil layer shell terluar pada sisi tersebut\r\n    \"\"\"\r\n    try:\r\n        wt = doc.GetElement(wall.GetTypeId())\r\n        if wt is None:\r\n            return None\r\n\r\n        cs = wt.GetCompoundStructure()\r\n        if cs is None:\r\n            return None\r\n\r\n        layers = list(cs.GetLayers())\r\n        if not layers or len(layers) == 0:\r\n            return None\r\n\r\n        room_side = get_room_facing_side(wall, room_point)\r\n        if room_side is None:\r\n            return None\r\n\r\n        ext_count = 0\r\n        int_count = 0\r\n\r\n        try:\r\n            ext_count = cs.GetNumberOfShellLayers(ShellLayerType.Exterior)\r\n        except:\r\n            ext_count = 0\r\n\r\n        try:\r\n            int_count = cs.GetNumberOfShellLayers(ShellLayerType.Interior)\r\n        except:\r\n            int_count = 0\r\n\r\n        # Jika room menghadap sisi exterior, ambil shell exterior terluar\r\n        if room_side == ShellLayerType.Exterior:\r\n            if ext_count > 0:\r\n                for i in range(ext_count):\r\n                    name = get_material_name(layers[i].MaterialId)\r\n                    if name:\r\n                        return name\r\n\r\n        # Jika room menghadap sisi interior, ambil shell interior terluar\r\n        elif room_side == ShellLayerType.Interior:\r\n            if int_count > 0:\r\n                start_index = len(layers) - int_count\r\n                for i in range(start_index, len(layers)):\r\n                    name = get_material_name(layers[i].MaterialId)\r\n                    if name:\r\n                        return name\r\n\r\n        # fallback: cari material pertama saja\r\n        for layer in layers:\r\n            name = get_material_name(layer.MaterialId)\r\n            if name:\r\n                return name\r\n\r\n    except:\r\n        pass\r\n\r\n    return None\r\n\r\ndef get_boundary_walls(room):\r\n    walls = []\r\n    try:\r\n        opts = SpatialElementBoundaryOptions()\r\n        loops = room.GetBoundarySegments(opts)\r\n\r\n        if loops:\r\n            for loop in loops:\r\n                for seg in loop:\r\n                    elem_id = seg.ElementId\r\n                    if elem_id and elem_id != ElementId.InvalidElementId:\r\n                        elem = doc.GetElement(elem_id)\r\n                        if isinstance(elem, Wall):\r\n                            if elem.Id.IntegerValue not in [w.Id.IntegerValue for w in walls]:\r\n                                walls.append(elem)\r\n    except:\r\n        pass\r\n    return walls\r\n\r\ndef set_room_text_parameter(room, param_name, value):\r\n    try:\r\n        p = room.LookupParameter(param_name)\r\n        if p and not p.IsReadOnly and p.StorageType == StorageType.String:\r\n            p.Set(value)\r\n            return True\r\n    except:\r\n        pass\r\n    return False\r\n\r\n# =====================================\r\n# COLLECT ROOMS\r\n# =====================================\r\nrooms = FilteredElementCollector(doc) \\\r\n    .OfCategory(BuiltInCategory.OST_Rooms) \\\r\n    .WhereElementIsNotElementType() \\\r\n    .ToElements()\r\n\r\nprocessed = []\r\nskipped = []\r\nfailed = []\r\n\r\nTransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\nfor room in rooms:\r\n    try:\r\n        try:\r\n            if room.Area <= 0:\r\n                skipped.append(\"Room {} skipped (area=0)\".format(room.Id.IntegerValue))\r\n                continue\r\n        except:\r\n            pass\r\n\r\n        room_point = get_room_point(room)\r\n        if room_point is None:\r\n            failed.append(\"Room {}: no room location point\".format(room.Id.IntegerValue))\r\n            continue\r\n\r\n        boundary_walls = get_boundary_walls(room)\r\n        if not boundary_walls:\r\n            failed.append(\"Room {}: no boundary walls found\".format(room.Id.IntegerValue))\r\n            continue\r\n\r\n        finish_names = []\r\n\r\n        for wall in boundary_walls:\r\n            mat_name = get_finish_material_from_room_side(wall, room_point)\r\n            if mat_name and mat_name not in finish_names:\r\n                finish_names.append(mat_name)\r\n\r\n        if not finish_names:\r\n            failed.append(\"Room {}: no room-side wall finish found\".format(room.Id.IntegerValue))\r\n            continue\r\n\r\n        finish_text = \", \".join(finish_names)\r\n\r\n        ok = set_room_text_parameter(room, target_param_name, finish_text)\r\n\r\n        room_name = \"\"\r\n        try:\r\n            room_name = room.LookupParameter(\"Name\").AsString()\r\n        except:\r\n            room_name = \"\"\r\n\r\n        if ok:\r\n            processed.append(\"Room {} [{}] -> {}\".format(\r\n                room.Id.IntegerValue, room_name, finish_text\r\n            ))\r\n        else:\r\n            failed.append(\"Room {}: parameter '{}' not writable/text\".format(\r\n                room.Id.IntegerValue, target_param_name\r\n            ))\r\n\r\n    except Exception as e:\r\n        failed.append(\"Room {}: {}\".format(room.Id.IntegerValue, str(e)))\r\n\r\nTransactionManager.Instance.TransactionTaskDone()\r\n\r\nOUT = processed, skipped, failedOUT = processed, skipped, failedOUT = processed, skipped, failed",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "75b102270a954cf78869c00a7c712a5b",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "d47e8bfe639f40b3afb3c618eca482f4",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "3d7c9e1a77494236a40707c90c96c482",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.CodeBlockNodeModel, DynamoCore",
+      "Id": "672a966479e6456cb8965d35f6e43614",
+      "NodeType": "CodeBlockNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "0e0f512a262746368d21909c0a379590",
+          "Name": "",
+          "Description": "Value of expression at line 1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Allows for DesignScript code to be authored directly",
+      "Code": "\"Wall Finish\";"
+    },
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "import clr\r\n\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import *\r\nfrom Autodesk.Revit.DB.Architecture import Room\r\n\r\nclr.AddReference('RevitServices')\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\n\r\ntarget_param_name = IN[0] if IN[0] else \"Comments\"\r\n\r\n# =====================================\r\n# HELPERS\r\n# =====================================\r\ndef get_room_point(room):\r\n    try:\r\n        loc = room.Location\r\n        if loc and hasattr(loc, \"Point\"):\r\n            return loc.Point\r\n    except:\r\n        pass\r\n    return None\r\n\r\ndef get_room_level_elevation(room):\r\n    try:\r\n        lvl = doc.GetElement(room.LevelId)\r\n        if lvl:\r\n            return lvl.Elevation\r\n    except:\r\n        pass\r\n    return None\r\n\r\ndef get_material_name(mat_id):\r\n    try:\r\n        if mat_id and mat_id != ElementId.InvalidElementId:\r\n            mat = doc.GetElement(mat_id)\r\n            if mat and mat.Name:\r\n                return mat.Name\r\n    except:\r\n        pass\r\n    return None\r\n\r\ndef point_inside_bbox_xy(point, bbox, tol=0.5):\r\n    if point is None or bbox is None:\r\n        return False\r\n    return (\r\n        bbox.Min.X - tol <= point.X <= bbox.Max.X + tol and\r\n        bbox.Min.Y - tol <= point.Y <= bbox.Max.Y + tol\r\n    )\r\n\r\ndef get_floor_reference_z(floor):\r\n    # pakai level + height above level jika ada\r\n    try:\r\n        lvl = doc.GetElement(floor.LevelId)\r\n        lvl_z = lvl.Elevation if lvl else 0.0\r\n\r\n        p = floor.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)\r\n        h = p.AsDouble() if p and p.HasValue else 0.0\r\n\r\n        return lvl_z + h\r\n    except:\r\n        pass\r\n\r\n    # fallback bbox\r\n    try:\r\n        bbox = floor.get_BoundingBox(None)\r\n        if bbox:\r\n            return bbox.Max.Z\r\n    except:\r\n        pass\r\n\r\n    return None\r\n\r\ndef get_top_finish_material_name(floor):\r\n    \"\"\"\r\n    Ambil material finish sisi atas floor.\r\n    Prioritas:\r\n    1. shell layer sisi Exterior (umumnya sisi atas floor)\r\n    2. fallback layer awal yang punya material\r\n    3. fallback material ids\r\n    \"\"\"\r\n    try:\r\n        ft = doc.GetElement(floor.GetTypeId())\r\n        if ft is None:\r\n            return None\r\n\r\n        cs = ft.GetCompoundStructure()\r\n        if cs is None:\r\n            return None\r\n\r\n        layers = list(cs.GetLayers())\r\n        if not layers or len(layers) == 0:\r\n            return None\r\n\r\n        # coba shell layer sisi atas / exterior\r\n        try:\r\n            ext_count = cs.GetNumberOfShellLayers(ShellLayerType.Exterior)\r\n        except:\r\n            ext_count = 0\r\n\r\n        if ext_count > 0:\r\n            for i in range(ext_count):\r\n                mat_name = get_material_name(layers[i].MaterialId)\r\n                if mat_name:\r\n                    return mat_name\r\n\r\n        # fallback: ambil layer pertama yang punya material\r\n        for layer in layers:\r\n            mat_name = get_material_name(layer.MaterialId)\r\n            if mat_name:\r\n                return mat_name\r\n\r\n    except:\r\n        pass\r\n\r\n    # fallback terakhir\r\n    try:\r\n        mat_ids = floor.GetMaterialIds(False)\r\n        if mat_ids and mat_ids.Count > 0:\r\n            for mat_id in mat_ids:\r\n                mat_name = get_material_name(mat_id)\r\n                if mat_name:\r\n                    return mat_name\r\n    except:\r\n        pass\r\n\r\n    return None\r\n\r\ndef get_best_floor_for_room(room, floors):\r\n    room_pt = get_room_point(room)\r\n    room_lvl_z = get_room_level_elevation(room)\r\n\r\n    if room_pt is None:\r\n        return None, \"No room point\"\r\n\r\n    candidates = []\r\n\r\n    for floor in floors:\r\n        try:\r\n            bbox = floor.get_BoundingBox(None)\r\n            if bbox is None:\r\n                continue\r\n\r\n            if not point_inside_bbox_xy(room_pt, bbox, tol=1.0):\r\n                continue\r\n\r\n            floor_z = get_floor_reference_z(floor)\r\n            if floor_z is None:\r\n                continue\r\n\r\n            # cari yang paling dekat dengan level room\r\n            dz = abs(floor_z - room_lvl_z) if room_lvl_z is not None else 999999\r\n            candidates.append((dz, floor))\r\n        except:\r\n            pass\r\n\r\n    if not candidates:\r\n        return None, \"No candidate floor\"\r\n\r\n    candidates.sort(key=lambda x: x[0])\r\n    return candidates[0][1], \"OK\"\r\n\r\ndef set_room_text_parameter(room, param_name, value):\r\n    try:\r\n        p = room.LookupParameter(param_name)\r\n        if not p:\r\n            return False, \"Parameter not found\"\r\n        if p.IsReadOnly:\r\n            return False, \"Parameter read-only\"\r\n        if p.StorageType != StorageType.String:\r\n            return False, \"Parameter not text\"\r\n        p.Set(value)\r\n        return True, \"OK\"\r\n    except Exception as e:\r\n        return False, str(e)\r\n\r\n# =====================================\r\n# COLLECT\r\n# =====================================\r\nrooms = FilteredElementCollector(doc) \\\r\n    .OfCategory(BuiltInCategory.OST_Rooms) \\\r\n    .WhereElementIsNotElementType() \\\r\n    .ToElements()\r\n\r\nfloors = FilteredElementCollector(doc) \\\r\n    .OfClass(Floor) \\\r\n    .WhereElementIsNotElementType() \\\r\n    .ToElements()\r\n\r\nprocessed = []\r\nskipped = []\r\nfailed = []\r\n\r\nTransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\nfor room in rooms:\r\n    try:\r\n        if room.Area <= 0:\r\n            skipped.append(\"Room {} skipped (area=0)\".format(room.Id.IntegerValue))\r\n            continue\r\n\r\n        room_name = \"\"\r\n        try:\r\n            room_name = room.LookupParameter(\"Name\").AsString()\r\n        except:\r\n            room_name = \"\"\r\n\r\n        floor, status = get_best_floor_for_room(room, floors)\r\n        if floor is None:\r\n            failed.append(\"Room {} [{}]: {}\".format(room.Id.IntegerValue, room_name, status))\r\n            continue\r\n\r\n        mat_name = get_top_finish_material_name(floor)\r\n        if not mat_name:\r\n            failed.append(\"Room {} [{}]: no top finish material found\".format(room.Id.IntegerValue, room_name))\r\n            continue\r\n\r\n        ok, msg = set_room_text_parameter(room, target_param_name, mat_name)\r\n        if ok:\r\n            processed.append(\"Room {} [{}] -> {}\".format(room.Id.IntegerValue, room_name, mat_name))\r\n        else:\r\n            failed.append(\"Room {} [{}]: {}\".format(room.Id.IntegerValue, room_name, msg))\r\n\r\n    except Exception as e:\r\n        failed.append(\"Room {}: {}\".format(room.Id.IntegerValue, str(e)))\r\n\r\nTransactionManager.Instance.TransactionTaskDone()\r\n\r\nOUT = processed, skipped, failed",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "d1cb9cbda7774f68be4965b64536af5d",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "723e3ef36ac6499dbec9a15205b76a27",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "13ecec660bad4a4b98452b9f58eb3e05",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.CodeBlockNodeModel, DynamoCore",
+      "Id": "98368848fd8e4a54ae920ccb27fbb00e",
+      "NodeType": "CodeBlockNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "783b18ccfd2f421e94a672a070e5977c",
+          "Name": "",
+          "Description": "Value of expression at line 1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Allows for DesignScript code to be authored directly",
+      "Code": "\"Floor Finish\";"
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.CodeBlockNodeModel, DynamoCore",
+      "Id": "ec8a66c6fd19424eb47cef4421de0ba4",
+      "NodeType": "CodeBlockNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "83dbce8fa7d3403ba82b57bc58098cde",
+          "Name": "",
+          "Description": "Value of expression at line 1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Allows for DesignScript code to be authored directly",
+      "Code": "\"Ceiling Finish\";"
+    },
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "import clr\r\n\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import *\r\nfrom Autodesk.Revit.DB.Architecture import Room\r\n\r\nclr.AddReference('RevitServices')\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\n\r\ntarget_param_name = IN[0] if IN[0] else \"Comments\"\r\n\r\n# =====================================\r\n# HELPERS\r\n# =====================================\r\ndef get_room_point(room):\r\n    try:\r\n        loc = room.Location\r\n        if loc and hasattr(loc, \"Point\"):\r\n            return loc.Point\r\n    except:\r\n        pass\r\n    return None\r\n\r\ndef get_room_upper_z(room):\r\n    \"\"\"\r\n    Ambil elevasi atas room.\r\n    Prioritas:\r\n    1. base level + Unbounded Height\r\n    2. room point Z + default\r\n    \"\"\"\r\n    try:\r\n        lvl = doc.GetElement(room.LevelId)\r\n        base_z = lvl.Elevation if lvl else 0.0\r\n\r\n        p = room.get_Parameter(BuiltInParameter.ROOM_UPPER_OFFSET)\r\n        upper_offset = p.AsDouble() if p and p.HasValue else None\r\n\r\n        p2 = room.get_Parameter(BuiltInParameter.ROOM_HEIGHT)\r\n        room_height = p2.AsDouble() if p2 and p2.HasValue else None\r\n\r\n        if room_height is not None:\r\n            return base_z + room_height\r\n        elif upper_offset is not None:\r\n            return base_z + upper_offset\r\n    except:\r\n        pass\r\n\r\n    pt = get_room_point(room)\r\n    if pt:\r\n        return pt.Z + 10.0\r\n\r\n    return None\r\n\r\ndef get_material_name(mat_id):\r\n    try:\r\n        if mat_id and mat_id != ElementId.InvalidElementId:\r\n            mat = doc.GetElement(mat_id)\r\n            if mat and mat.Name:\r\n                return mat.Name\r\n    except:\r\n        pass\r\n    return None\r\n\r\ndef point_inside_bbox_xy(point, bbox, tol=0.5):\r\n    if point is None or bbox is None:\r\n        return False\r\n    return (\r\n        bbox.Min.X - tol <= point.X <= bbox.Max.X + tol and\r\n        bbox.Min.Y - tol <= point.Y <= bbox.Max.Y + tol\r\n    )\r\n\r\ndef get_ceiling_reference_z(ceiling):\r\n    \"\"\"\r\n    Ambil elevasi referensi ceiling.\r\n    Prioritas:\r\n    1. level elevation + height above level\r\n    2. bbox min z\r\n    \"\"\"\r\n    try:\r\n        lvl = doc.GetElement(ceiling.LevelId)\r\n        lvl_z = lvl.Elevation if lvl else 0.0\r\n\r\n        p = ceiling.get_Parameter(BuiltInParameter.CEILING_HEIGHTABOVELEVEL_PARAM)\r\n        h = p.AsDouble() if p and p.HasValue else 0.0\r\n\r\n        return lvl_z + h\r\n    except:\r\n        pass\r\n\r\n    try:\r\n        bbox = ceiling.get_BoundingBox(None)\r\n        if bbox:\r\n            return bbox.Min.Z\r\n    except:\r\n        pass\r\n\r\n    return None\r\n\r\ndef get_bottom_finish_material_name(ceiling):\r\n    \"\"\"\r\n    Ambil material sisi bawah ceiling.\r\n    Prioritas:\r\n    1. shell layer sisi interior\r\n    2. fallback layer terakhir yang punya material\r\n    3. fallback material ids\r\n    \"\"\"\r\n    try:\r\n        ct = doc.GetElement(ceiling.GetTypeId())\r\n        if ct is None:\r\n            return None\r\n\r\n        cs = ct.GetCompoundStructure()\r\n        if cs is None:\r\n            return None\r\n\r\n        layers = list(cs.GetLayers())\r\n        if not layers or len(layers) == 0:\r\n            return None\r\n\r\n        # Untuk ceiling, sisi bawah yang menghadap room biasanya sisi interior\r\n        try:\r\n            int_count = cs.GetNumberOfShellLayers(ShellLayerType.Interior)\r\n        except:\r\n            int_count = 0\r\n\r\n        if int_count > 0:\r\n            start_index = len(layers) - int_count\r\n            for i in range(start_index, len(layers)):\r\n                mat_name = get_material_name(layers[i].MaterialId)\r\n                if mat_name:\r\n                    return mat_name\r\n\r\n        # fallback: ambil layer terakhir yang punya material\r\n        for i in range(len(layers) - 1, -1, -1):\r\n            mat_name = get_material_name(layers[i].MaterialId)\r\n            if mat_name:\r\n                return mat_name\r\n\r\n    except:\r\n        pass\r\n\r\n    # fallback terakhir\r\n    try:\r\n        mat_ids = ceiling.GetMaterialIds(False)\r\n        if mat_ids and mat_ids.Count > 0:\r\n            for mat_id in mat_ids:\r\n                mat_name = get_material_name(mat_id)\r\n                if mat_name:\r\n                    return mat_name\r\n    except:\r\n        pass\r\n\r\n    return None\r\n\r\ndef get_best_ceiling_for_room(room, ceilings):\r\n    room_pt = get_room_point(room)\r\n    room_top_z = get_room_upper_z(room)\r\n\r\n    if room_pt is None:\r\n        return None, \"No room point\"\r\n\r\n    candidates = []\r\n\r\n    for ceiling in ceilings:\r\n        try:\r\n            bbox = ceiling.get_BoundingBox(None)\r\n            if bbox is None:\r\n                continue\r\n\r\n            if not point_inside_bbox_xy(room_pt, bbox, tol=1.0):\r\n                continue\r\n\r\n            ceil_z = get_ceiling_reference_z(ceiling)\r\n            if ceil_z is None:\r\n                continue\r\n\r\n            # ceiling harus di atas atau dekat atas room\r\n            dz = abs(ceil_z - room_top_z) if room_top_z is not None else 999999\r\n            candidates.append((dz, ceil_z, ceiling))\r\n        except:\r\n            pass\r\n\r\n    if not candidates:\r\n        return None, \"No candidate ceiling\"\r\n\r\n    candidates.sort(key=lambda x: x[0])\r\n    return candidates[0][2], \"OK\"\r\n\r\ndef set_room_text_parameter(room, param_name, value):\r\n    try:\r\n        p = room.LookupParameter(param_name)\r\n        if not p:\r\n            return False, \"Parameter not found\"\r\n        if p.IsReadOnly:\r\n            return False, \"Parameter read-only\"\r\n        if p.StorageType != StorageType.String:\r\n            return False, \"Parameter not text\"\r\n        p.Set(value)\r\n        return True, \"OK\"\r\n    except Exception as e:\r\n        return False, str(e)\r\n\r\n# =====================================\r\n# COLLECT\r\n# =====================================\r\nrooms = FilteredElementCollector(doc) \\\r\n    .OfCategory(BuiltInCategory.OST_Rooms) \\\r\n    .WhereElementIsNotElementType() \\\r\n    .ToElements()\r\n\r\nceilings = FilteredElementCollector(doc) \\\r\n    .OfCategory(BuiltInCategory.OST_Ceilings) \\\r\n    .WhereElementIsNotElementType() \\\r\n    .ToElements()\r\n\r\nprocessed = []\r\nskipped = []\r\nfailed = []\r\n\r\nTransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\nfor room in rooms:\r\n    try:\r\n        if room.Area <= 0:\r\n            skipped.append(\"Room {} skipped (area=0)\".format(room.Id.IntegerValue))\r\n            continue\r\n\r\n        room_name = \"\"\r\n        try:\r\n            room_name = room.LookupParameter(\"Name\").AsString()\r\n        except:\r\n            room_name = \"\"\r\n\r\n        ceiling, status = get_best_ceiling_for_room(room, ceilings)\r\n        if ceiling is None:\r\n            failed.append(\"Room {} [{}]: {}\".format(room.Id.IntegerValue, room_name, status))\r\n            continue\r\n\r\n        mat_name = get_bottom_finish_material_name(ceiling)\r\n        if not mat_name:\r\n            failed.append(\"Room {} [{}]: no ceiling finish material found\".format(room.Id.IntegerValue, room_name))\r\n            continue\r\n\r\n        ok, msg = set_room_text_parameter(room, target_param_name, mat_name)\r\n        if ok:\r\n            processed.append(\"Room {} [{}] -> {}\".format(room.Id.IntegerValue, room_name, mat_name))\r\n        else:\r\n            failed.append(\"Room {} [{}]: {}\".format(room.Id.IntegerValue, room_name, msg))\r\n\r\n    except Exception as e:\r\n        failed.append(\"Room {}: {}\".format(room.Id.IntegerValue, str(e)))\r\n\r\nTransactionManager.Instance.TransactionTaskDone()\r\n\r\nOUT = processed, skipped, failed",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "770bae9ed52041a9b51efc1ca84fecaa",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "81f7fa5b80a54bf3910f9190b90424a4",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "324e5eecc84842ab8a5294139611278f",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "0e0f512a262746368d21909c0a379590",
+      "End": "d47e8bfe639f40b3afb3c618eca482f4",
+      "Id": "141cd7422a35402283750dda562dafbf",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "783b18ccfd2f421e94a672a070e5977c",
+      "End": "723e3ef36ac6499dbec9a15205b76a27",
+      "Id": "9b8bb9c26e69409cbfcbba32cb91b3ae",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "83dbce8fa7d3403ba82b57bc58098cde",
+      "End": "81f7fa5b80a54bf3910f9190b90424a4",
+      "Id": "f79b5a723ae9433486609c827458fd26",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": true,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "3.3",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "8.2",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "3.3.0.6316",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "75b102270a954cf78869c00a7c712a5b",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 544.0,
+        "Y": 184.0
+      },
+      {
+        "Id": "672a966479e6456cb8965d35f6e43614",
+        "Name": "Code Block",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 254.0,
+        "Y": 183.0
+      },
+      {
+        "Id": "d1cb9cbda7774f68be4965b64536af5d",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 545.0,
+        "Y": 332.0
+      },
+      {
+        "Id": "98368848fd8e4a54ae920ccb27fbb00e",
+        "Name": "Code Block",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 255.0,
+        "Y": 335.0
+      },
+      {
+        "Id": "ec8a66c6fd19424eb47cef4421de0ba4",
+        "Name": "Code Block",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 251.0,
+        "Y": 495.0
+      },
+      {
+        "Id": "770bae9ed52041a9b51efc1ca84fecaa",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 554.0,
+        "Y": 493.0
+      }
+    ],
+    "Annotations": [],
+    "X": 0.0,
+    "Y": 0.0,
+    "Zoom": 1.0
+  }
+}
