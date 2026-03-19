@@ -1,0 +1,268 @@
+{
+  "Uuid": "d1e77991-c650-4441-b6dc-f55cff5fea78",
+  "IsCustomNode": false,
+  "Description": "",
+  "Name": "merge-two-floors",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [
+    {
+      "Id": "8ace5449765f4e87922e4cfacee5fce1",
+      "Name": "Floor 1",
+      "Type": "selection",
+      "Type2": "hostSelection",
+      "Value": "633d2298-32ae-4711-bc36-a4e2153ba345-000565ed",
+      "Description": "Select a model element from the document."
+    },
+    {
+      "Id": "8a1f3cf6c8de48f68085c5159c0e732a",
+      "Name": "Floor 2",
+      "Type": "selection",
+      "Type2": "hostSelection",
+      "Value": "633d2298-32ae-4711-bc36-a4e2153ba345-00056601",
+      "Description": "Select a model element from the document."
+    },
+    {
+      "Id": "3adaca7f60b447c38a560fa09ce9eeac",
+      "Name": "Delete old floors",
+      "Type": "boolean",
+      "Type2": "boolean",
+      "Value": "true",
+      "Description": "Enables selection between True and False"
+    }
+  ],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "import clr\r\n\r\nclr.AddReference('RevitAPI')\r\nclr.AddReference('RevitServices')\r\nclr.AddReference('System')\r\n\r\nfrom Autodesk.Revit.DB import *\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\nfrom System.Collections.Generic import List\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\n\r\ndef unwrap(x):\r\n    try:\r\n        return UnwrapElement(x)\r\n    except:\r\n        return x\r\n\r\nfloor1 = unwrap(IN[0])\r\nfloor2 = unwrap(IN[1])\r\ndelete_old = IN[2] if IN[2] is not None else False\r\n\r\ntol_z = 1e-6\r\n\r\ndef get_first_solid(elem):\r\n    opt = Options()\r\n    opt.ComputeReferences = True\r\n    opt.IncludeNonVisibleObjects = True\r\n    geo = elem.get_Geometry(opt)\r\n    if geo is None:\r\n        return None\r\n\r\n    solids = []\r\n\r\n    def collect_solids(geom):\r\n        for g in geom:\r\n            if isinstance(g, Solid) and g.Volume > 1e-9:\r\n                solids.append(g)\r\n            elif isinstance(g, GeometryInstance):\r\n                inst_geo = g.GetInstanceGeometry()\r\n                collect_solids(inst_geo)\r\n\r\n    collect_solids(geo)\r\n\r\n    if not solids:\r\n        return None\r\n\r\n    # ambil solid dengan volume terbesar\r\n    solids.sort(key=lambda s: s.Volume, reverse=True)\r\n    return solids[0]\r\n\r\ndef get_top_planar_face(solid):\r\n    top_face = None\r\n    top_z = -1e100\r\n\r\n    for f in solid.Faces:\r\n        pf = f if isinstance(f, PlanarFace) else None\r\n        if pf is None:\r\n            continue\r\n\r\n        n = pf.FaceNormal.Normalize()\r\n\r\n        # hanya ambil face yang menghadap ke atas\r\n        if n.Z <= 0.999:\r\n            continue\r\n\r\n        # ambil face tertinggi berdasarkan titik origin\r\n        z = pf.Origin.Z\r\n        if z > top_z:\r\n            top_z = z\r\n            top_face = pf\r\n\r\n    return top_face\r\n\r\ndef curve_loop_avg_z(loop):\r\n    zs = []\r\n    for c in loop:\r\n        zs.append(c.GetEndPoint(0).Z)\r\n        zs.append(c.GetEndPoint(1).Z)\r\n    if not zs:\r\n        return None\r\n    return sum(zs) / float(len(zs))\r\n\r\ndef clone_loop(loop):\r\n    new_loop = CurveLoop()\r\n    for c in loop:\r\n        new_loop.Append(c.Clone())\r\n    return new_loop\r\n\r\ndef sort_loops_outer_first(loops):\r\n    # loop terpanjang biasanya outer boundary\r\n    temp = []\r\n    for lp in loops:\r\n        try:\r\n            length = lp.GetExactLength()\r\n        except:\r\n            length = 0.0\r\n        temp.append((length, lp))\r\n\r\n    temp.sort(key=lambda x: x[0], reverse=True)\r\n    return [x[1] for x in temp]\r\n\r\ndef orient_loops_for_floor(loops):\r\n    # asumsi normal +Z\r\n    # outer = CCW, inner holes = CW\r\n    if not loops:\r\n        return loops\r\n\r\n    loops_sorted = sort_loops_outer_first(loops)\r\n    result = []\r\n\r\n    for i, lp in enumerate(loops_sorted):\r\n        cl = clone_loop(lp)\r\n        is_ccw = cl.IsCounterclockwise(XYZ.BasisZ)\r\n\r\n        if i == 0:\r\n            # outer loop harus CCW\r\n            if not is_ccw:\r\n                cl.Flip()\r\n        else:\r\n            # inner loops / holes harus CW\r\n            if is_ccw:\r\n                cl.Flip()\r\n\r\n        result.append(cl)\r\n\r\n    return result\r\n\r\n# validasi awal\r\nif floor1 is None or floor2 is None:\r\n    OUT = \"Pilih 2 floor.\"\r\nelif not isinstance(floor1, Floor) or not isinstance(floor2, Floor):\r\n    OUT = \"Input harus 2 elemen Floor.\"\r\nelif floor1.Id == floor2.Id:\r\n    OUT = \"Floor 1 dan Floor 2 tidak boleh sama.\"\r\nelif floor1.LevelId != floor2.LevelId:\r\n    OUT = \"Kedua floor harus di level yang sama.\"\r\nelse:\r\n    solid1 = get_first_solid(floor1)\r\n    solid2 = get_first_solid(floor2)\r\n\r\n    if solid1 is None or solid2 is None:\r\n        OUT = \"Gagal membaca solid floor.\"\r\n    else:\r\n        try:\r\n            union_solid = BooleanOperationsUtils.ExecuteBooleanOperation(\r\n                solid1,\r\n                solid2,\r\n                BooleanOperationsType.Union\r\n            )\r\n        except Exception as e:\r\n            OUT = \"Boolean union gagal: {}\".format(str(e))\r\n        else:\r\n            top_face = get_top_planar_face(union_solid)\r\n\r\n            if top_face is None:\r\n                OUT = \"Tidak menemukan top planar face dari hasil union.\"\r\n            else:\r\n                raw_loops = list(top_face.GetEdgesAsCurveLoops())\r\n\r\n                # filter hanya loop pada elevasi top face\r\n                top_z = top_face.Origin.Z\r\n                filtered = []\r\n\r\n                for lp in raw_loops:\r\n                    avgz = curve_loop_avg_z(lp)\r\n                    if avgz is not None and abs(avgz - top_z) < 1e-4:\r\n                        filtered.append(lp)\r\n\r\n                if not filtered:\r\n                    filtered = raw_loops\r\n\r\n                profile_loops = orient_loops_for_floor(filtered)\r\n\r\n                # validasi boundary\r\n                is_valid = BoundaryValidation.IsValidHorizontalBoundary(profile_loops)\r\n\r\n                if not is_valid:\r\n                    OUT = \"Boundary hasil union tidak valid untuk Floor.Create.\"\r\n                else:\r\n                    floor_type_id = floor1.FloorType.Id\r\n                    level_id = floor1.LevelId\r\n\r\n                    TransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\n                    try:\r\n                        profile = List[CurveLoop]()\r\n                        for lp in profile_loops:\r\n                            profile.Add(lp)\r\n\r\n                        new_floor = Floor.Create(doc, profile, floor_type_id, level_id)\r\n\r\n                        # samakan offset dari floor1 kalau ada\r\n                        try:\r\n                            p1 = floor1.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)\r\n                            p2 = new_floor.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)\r\n                            if p1 and p2 and (not p1.IsReadOnly) and (not p2.IsReadOnly):\r\n                                p2.Set(p1.AsDouble())\r\n                        except:\r\n                            pass\r\n\r\n                        if delete_old:\r\n                            doc.Delete(floor1.Id)\r\n                            doc.Delete(floor2.Id)\r\n\r\n                        OUT = new_floor\r\n\r\n                    except Exception as e:\r\n                        OUT = \"Floor.Create gagal: {}\".format(str(e))\r\n\r\n                    TransactionManager.Instance.TransactionTaskDone()",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "ea57c5925b704527b6c86b866380dfec",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "ae9f5999ed374bc68cc64f87453c2795",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "ffd832f947374045ba767db4a00e5a08",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "79cd1bd92dd046c098da5984d769fa88",
+          "Name": "IN[2]",
+          "Description": "Input #2",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "0afbd49bc1e44b479407d1e22dce2db1",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "Dynamo.Nodes.DSModelElementSelection, DSRevitNodesUI",
+      "NodeType": "ExtensionNode",
+      "InstanceId": [
+        "633d2298-32ae-4711-bc36-a4e2153ba345-000565ed"
+      ],
+      "Id": "8ace5449765f4e87922e4cfacee5fce1",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "d70f68bdd20647f5999495e14518d085",
+          "Name": "Element",
+          "Description": "The selected elements.",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Select a model element from the document."
+    },
+    {
+      "ConcreteType": "Dynamo.Nodes.DSModelElementSelection, DSRevitNodesUI",
+      "NodeType": "ExtensionNode",
+      "InstanceId": [
+        "633d2298-32ae-4711-bc36-a4e2153ba345-00056601"
+      ],
+      "Id": "8a1f3cf6c8de48f68085c5159c0e732a",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "52d9471cf8294d40a1ffcda459303af7",
+          "Name": "Element",
+          "Description": "The selected elements.",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Select a model element from the document."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "Id": "3adaca7f60b447c38a560fa09ce9eeac",
+      "NodeType": "BooleanInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "5b0ae63f02e041a5a2016b7e5ce0f97b",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Enables selection between True and False",
+      "InputValue": true
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "d70f68bdd20647f5999495e14518d085",
+      "End": "ae9f5999ed374bc68cc64f87453c2795",
+      "Id": "cd54c51a52004f57a24255e0280c18b7",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "52d9471cf8294d40a1ffcda459303af7",
+      "End": "ffd832f947374045ba767db4a00e5a08",
+      "Id": "dcb3a6248fe5495591371ab57247241c",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "5b0ae63f02e041a5a2016b7e5ce0f97b",
+      "End": "79cd1bd92dd046c098da5984d769fa88",
+      "Id": "a666b9239323484482fca1746c4a78e1",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": null,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "3.3",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "8.2",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "3.3.0.6316",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "ea57c5925b704527b6c86b866380dfec",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 600.0,
+        "Y": 358.0
+      },
+      {
+        "Id": "8ace5449765f4e87922e4cfacee5fce1",
+        "Name": "Floor 1",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 303.0,
+        "Y": 249.0
+      },
+      {
+        "Id": "8a1f3cf6c8de48f68085c5159c0e732a",
+        "Name": "Floor 2",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 303.0,
+        "Y": 392.0
+      },
+      {
+        "Id": "3adaca7f60b447c38a560fa09ce9eeac",
+        "Name": "Delete old floors",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 344.0,
+        "Y": 536.0
+      }
+    ],
+    "Annotations": [],
+    "X": 383.5,
+    "Y": -19.0,
+    "Zoom": 1.0
+  }
+}
