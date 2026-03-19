@@ -1,0 +1,359 @@
+{
+  "Uuid": "8bad1221-1ee3-41c2-80cd-9f9f65dffdc8",
+  "IsCustomNode": false,
+  "Description": "",
+  "Name": "auto-floors-by-rooms",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [
+    {
+      "Id": "02438ee264524be3afe188840a7122ed",
+      "Name": "Floor Types",
+      "Type": "selection",
+      "Type2": "dropdownSelection",
+      "Value": "Standard Timber-Wood Finish",
+      "Description": "All floor types available in the document.",
+      "SelectedIndex": 9
+    },
+    {
+      "Id": "08abee939343446bb31f38b16eb52123",
+      "Name": "Offset",
+      "Type": "number",
+      "Type2": "number",
+      "Value": "0",
+      "NumberType": "Double",
+      "Description": "Creates a number"
+    },
+    {
+      "Id": "40dbf83bac624f21a6ff7cb976eb539c",
+      "Name": "Structural",
+      "Type": "boolean",
+      "Type2": "boolean",
+      "Value": "false",
+      "Description": "Enables selection between True and False"
+    }
+  ],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "import clr\r\n\r\nclr.AddReference('RevitAPI')\r\nfrom Autodesk.Revit.DB import *\r\nfrom Autodesk.Revit.DB.Architecture import Room\r\n\r\nclr.AddReference('RevitServices')\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\n\r\n# =========================\r\n# INPUT\r\n# =========================\r\nrooms_input = IN[0]\r\nfloor_type = UnwrapElement(IN[1])\r\noffset = IN[2] if IN[2] else 0.0\r\nis_structural = IN[3] if IN[3] is not None else False\r\n\r\n# Pastikan input room menjadi list\r\nif not isinstance(rooms_input, list):\r\n    rooms = [UnwrapElement(rooms_input)]\r\nelse:\r\n    rooms = [UnwrapElement(r) for r in rooms_input]\r\n\r\n# =========================\r\n# HELPER\r\n# =========================\r\ndef get_room_boundary_loops(room):\r\n    \"\"\"\r\n    Mengambil boundary room dan mengubahnya menjadi list of CurveLoop.\r\n    Satu room bisa punya lebih dari satu loop.\r\n    \"\"\"\r\n    opts = SpatialElementBoundaryOptions()\r\n    segments_lists = room.GetBoundarySegments(opts)\r\n\r\n    if not segments_lists:\r\n        return None\r\n\r\n    curve_loops = []\r\n\r\n    for seg_list in segments_lists:\r\n        curve_loop = CurveLoop()\r\n        has_curve = False\r\n\r\n        for seg in seg_list:\r\n            c = seg.GetCurve()\r\n            if c:\r\n                curve_loop.Append(c)\r\n                has_curve = True\r\n\r\n        if has_curve:\r\n            curve_loops.append(curve_loop)\r\n\r\n    return curve_loops if curve_loops else None\r\n\r\n\r\ndef set_floor_offset(floor, offset_value):\r\n    \"\"\"\r\n    Set parameter height above level jika tersedia.\r\n    \"\"\"\r\n    p = floor.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM)\r\n    if p and not p.IsReadOnly:\r\n        p.Set(offset_value)\r\n\r\n\r\ndef valid_room(room):\r\n    \"\"\"\r\n    Cek room valid:\r\n    - objek ada\r\n    - area > 0\r\n    - punya level\r\n    \"\"\"\r\n    if room is None:\r\n        return False, \"Room is None\"\r\n\r\n    try:\r\n        if room.Area <= 0:\r\n            return False, \"Room area <= 0\"\r\n    except:\r\n        return False, \"Cannot read room area\"\r\n\r\n    try:\r\n        lvl_id = room.LevelId\r\n        if lvl_id == ElementId.InvalidElementId:\r\n            return False, \"Invalid LevelId\"\r\n    except:\r\n        return False, \"Cannot read room level\"\r\n\r\n    return True, \"\"\r\n\r\n\r\n# =========================\r\n# MAIN\r\n# =========================\r\ncreated_floors = []\r\nfailed_rooms = []\r\nlog = []\r\n\r\nif floor_type is None:\r\n    OUT = ([], [\"FloorType input is null\"], [\"No floor created\"])\r\nelse:\r\n    TransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\n    for room in rooms:\r\n        try:\r\n            ok, msg = valid_room(room)\r\n            if not ok:\r\n                failed_rooms.append(room)\r\n                log.append(\"FAILED - Room [{}]: {}\".format(room.Id.IntegerValue if room else \"None\", msg))\r\n                continue\r\n\r\n            loops = get_room_boundary_loops(room)\r\n            if not loops:\r\n                failed_rooms.append(room)\r\n                log.append(\"FAILED - Room [{}]: No valid boundary loops\".format(room.Id.IntegerValue))\r\n                continue\r\n\r\n            level_id = room.LevelId\r\n\r\n            # Membuat floor dari boundary room\r\n            new_floor = Floor.Create(\r\n                doc,\r\n                loops,\r\n                floor_type.Id,\r\n                level_id,\r\n                is_structural,\r\n                None,\r\n                0.0\r\n            )\r\n\r\n            # Set offset setelah floor dibuat\r\n            if new_floor:\r\n                set_floor_offset(new_floor, offset)\r\n                created_floors.append(new_floor)\r\n                log.append(\"SUCCESS - Room [{}] -> Floor [{}]\".format(\r\n                    room.Id.IntegerValue,\r\n                    new_floor.Id.IntegerValue\r\n                ))\r\n            else:\r\n                failed_rooms.append(room)\r\n                log.append(\"FAILED - Room [{}]: Floor.Create returned null\".format(room.Id.IntegerValue))\r\n\r\n        except Exception as e:\r\n            failed_rooms.append(room)\r\n            try:\r\n                rid = room.Id.IntegerValue\r\n            except:\r\n                rid = \"Unknown\"\r\n            log.append(\"FAILED - Room [{}]: {}\".format(rid, str(e)))\r\n\r\n    TransactionManager.Instance.TransactionTaskDone()\r\n\r\n    OUT = (created_floors, failed_rooms, log)",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "5eae8de5a2ff4a3c95ed4fc5b5e02416",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "b00a3794c8324aa480f1f0f529ca215b",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "a8ead621d3f8454981ef92ea55cd0c15",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "39e59b820e3e4c10907829ab2712ba6f",
+          "Name": "IN[2]",
+          "Description": "Input #2",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "ce7bdb071e1446aeac21e1a7ead55521",
+          "Name": "IN[3]",
+          "Description": "Input #3",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "cef2232701b14af980da6cc27777c9fb",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "DSRevitNodesUI.ElementsOfCategory, DSRevitNodesUI",
+      "Id": "f9fd892dac1f43b7b701d0cf9259883e",
+      "NodeType": "ExtensionNode",
+      "Inputs": [
+        {
+          "Id": "b0e31600d14649e89e809489c8c49f1b",
+          "Name": "Category",
+          "Description": "The Category",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "518fbfeebcd540968e79b3ed7a42cc5b",
+          "Name": "Elements",
+          "Description": "An element class.",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Get all elements of the specified category from the model."
+    },
+    {
+      "ConcreteType": "DSRevitNodesUI.Categories, DSRevitNodesUI",
+      "SelectedIndex": 507,
+      "SelectedString": "OST_Rooms",
+      "Id": "eb213f40c2534a8a857336d8318dfe0f",
+      "NodeType": "ExtensionNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "5c8690e139b3400ea4f9f72a9a1d19d6",
+          "Name": "Category",
+          "Description": "The selected Category.",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "All built-in categories."
+    },
+    {
+      "ConcreteType": "DSRevitNodesUI.FloorTypes, DSRevitNodesUI",
+      "SelectedIndex": 9,
+      "SelectedString": "Standard Timber-Wood Finish",
+      "Id": "02438ee264524be3afe188840a7122ed",
+      "NodeType": "ExtensionNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "552e137b12db453eb613ec92c43ee50b",
+          "Name": "Floor Type",
+          "Description": "The selected Floor Type",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "All floor types available in the document."
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.DoubleInput, CoreNodeModels",
+      "NumberType": "Double",
+      "Id": "08abee939343446bb31f38b16eb52123",
+      "NodeType": "NumberInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "76d2c590df744f409aacba76e6071824",
+          "Name": "",
+          "Description": "Double",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Creates a number",
+      "InputValue": 0.0
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.BoolSelector, CoreNodeModels",
+      "Id": "40dbf83bac624f21a6ff7cb976eb539c",
+      "NodeType": "BooleanInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "fc04d728c3d74a99a8191c64a9bb5f46",
+          "Name": "",
+          "Description": "Boolean",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Enables selection between True and False",
+      "InputValue": false
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "518fbfeebcd540968e79b3ed7a42cc5b",
+      "End": "b00a3794c8324aa480f1f0f529ca215b",
+      "Id": "707fb9ded2454bd88600ea6835ac8d96",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "5c8690e139b3400ea4f9f72a9a1d19d6",
+      "End": "b0e31600d14649e89e809489c8c49f1b",
+      "Id": "9f95f6d1acde45a5a26650c631e4f72b",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "552e137b12db453eb613ec92c43ee50b",
+      "End": "a8ead621d3f8454981ef92ea55cd0c15",
+      "Id": "f096b57ceb8e42f6a9ddfe0542324c87",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "76d2c590df744f409aacba76e6071824",
+      "End": "39e59b820e3e4c10907829ab2712ba6f",
+      "Id": "a514551194d34e7780524d59aa6f6dac",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "fc04d728c3d74a99a8191c64a9bb5f46",
+      "End": "ce7bdb071e1446aeac21e1a7ead55521",
+      "Id": "668895779c6c480e86e6762557846c55",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [],
+  "EnableLegacyPolyCurveBehavior": null,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "3.3",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "8.2",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "3.3.0.6316",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "5eae8de5a2ff4a3c95ed4fc5b5e02416",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 999.0,
+        "Y": 399.0
+      },
+      {
+        "Id": "f9fd892dac1f43b7b701d0cf9259883e",
+        "Name": "All Elements of Category",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 466.0,
+        "Y": 255.0
+      },
+      {
+        "Id": "eb213f40c2534a8a857336d8318dfe0f",
+        "Name": "Categories",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 161.0,
+        "Y": 255.0
+      },
+      {
+        "Id": "02438ee264524be3afe188840a7122ed",
+        "Name": "Floor Types",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 416.0,
+        "Y": 379.0
+      },
+      {
+        "Id": "08abee939343446bb31f38b16eb52123",
+        "Name": "Offset",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 568.0,
+        "Y": 511.0
+      },
+      {
+        "Id": "40dbf83bac624f21a6ff7cb976eb539c",
+        "Name": "Structural",
+        "IsSetAsInput": true,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 689.0,
+        "Y": 655.0
+      }
+    ],
+    "Annotations": [],
+    "X": 0.0,
+    "Y": 0.0,
+    "Zoom": 1.0
+  }
+}
