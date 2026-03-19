@@ -242,7 +242,7 @@
   ],
   "Dependencies": [],
   "NodeLibraryDependencies": [],
-  "EnableLegacyPolyCurveBehavior": null,
+  "EnableLegacyPolyCurveBehavior": true,
   "Thumbnail": "",
   "GraphDocumentationURL": null,
   "ExtensionWorkspaceData": [
@@ -352,8 +352,8 @@
       }
     ],
     "Annotations": [],
-    "X": 0.0,
-    "Y": 0.0,
-    "Zoom": 1.0
+    "X": -170.20397390203823,
+    "Y": -8.98658485995088,
+    "Zoom": 1.0542982150113263
   }
 }
