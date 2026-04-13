@@ -1,0 +1,506 @@
+{
+  "Uuid": "ae05c003-7bb6-4adb-a644-c3e9f7cd2d9d",
+  "IsCustomNode": false,
+  "Description": "",
+  "Name": "inject-shared-parameters",
+  "ElementResolver": {
+    "ResolutionMap": {}
+  },
+  "Inputs": [],
+  "Outputs": [],
+  "Nodes": [
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "# Dynamo Python Script\r\n# IN[0] = shared parameter file path, contoh: r\"C:\\BIM\\Company_SharedParameters.txt\"\r\n# IN[1] = group name di file shared parameter, contoh: \"Data Perencanaan\"\r\n# IN[2] = parameter name, contoh: \"SP_ReferensiStandar\"\r\n# IN[3] = binding mode, isi \"Type\" atau \"Instance\"\r\n\r\nimport clr\r\n\r\nclr.AddReference(\"RevitAPI\")\r\nfrom Autodesk.Revit.DB import *\r\n\r\nclr.AddReference(\"RevitServices\")\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\nuiapp = DocumentManager.Instance.CurrentUIApplication\r\napp = uiapp.Application\r\n\r\nsp_file_path = IN[0]\r\ngroup_name = IN[1]\r\nparam_name = IN[2]\r\nbinding_mode = IN[3]\r\n\r\nresult = {\r\n    \"success\": False,\r\n    \"message\": \"\",\r\n    \"bound_categories\": [],\r\n    \"skipped_categories\": []\r\n}\r\n\r\ndef get_external_definition(def_file, group_name, param_name):\r\n    if def_file is None:\r\n        return None, \"Shared parameter file tidak bisa dibuka.\"\r\n    \r\n    target_group = None\r\n    for g in def_file.Groups:\r\n        if g.Name == group_name:\r\n            target_group = g\r\n            break\r\n    \r\n    if target_group is None:\r\n        return None, \"Group '{}' tidak ditemukan.\".format(group_name)\r\n    \r\n    target_def = None\r\n    for d in target_group.Definitions:\r\n        if d.Name == param_name:\r\n            target_def = d\r\n            break\r\n    \r\n    if target_def is None:\r\n        return None, \"Parameter '{}' tidak ditemukan dalam group '{}'.\".format(param_name, group_name)\r\n    \r\n    return target_def, None\r\n\r\ntry:\r\n    # Set shared parameter file aktif\r\n    app.SharedParametersFilename = sp_file_path\r\n    def_file = app.OpenSharedParameterFile()\r\n\r\n    ext_def, err = get_external_definition(def_file, group_name, param_name)\r\n    if err:\r\n        result[\"message\"] = err\r\n        OUT = result\r\n    else:\r\n        cat_set = app.Create.NewCategorySet()\r\n\r\n        # Ambil semua kategori yang boleh diberi project/shared parameter\r\n        for cat in doc.Settings.Categories:\r\n            try:\r\n                # Filter kategori yang valid untuk bound parameter\r\n                if cat and cat.AllowsBoundParameters:\r\n                    # Optional: skip tag categories, analytical, internal, dsb bila mau\r\n                    # if not cat.IsTagCategory:\r\n                    cat_set.Insert(cat)\r\n                    result[\"bound_categories\"].append(cat.Name)\r\n                else:\r\n                    if cat:\r\n                        result[\"skipped_categories\"].append(cat.Name)\r\n            except:\r\n                # Ada beberapa kategori yang kadang error saat dibaca\r\n                try:\r\n                    result[\"skipped_categories\"].append(cat.Name)\r\n                except:\r\n                    pass\r\n\r\n        if cat_set.IsEmpty:\r\n            result[\"message\"] = \"Tidak ada kategori yang valid untuk di-bind.\"\r\n            OUT = result\r\n        else:\r\n            if str(binding_mode).lower() == \"type\":\r\n                binding = app.Create.NewTypeBinding(cat_set)\r\n            else:\r\n                binding = app.Create.NewInstanceBinding(cat_set)\r\n\r\n            binding_map = doc.ParameterBindings\r\n\r\n            TransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\n            # Pilih group tampilan di Properties\r\n            # Untuk Revit baru, GroupTypeId.Text umumnya aman\r\n            ok = False\r\n            try:\r\n                ok = binding_map.Insert(ext_def, binding, GroupTypeId.Text)\r\n            except:\r\n                # fallback untuk API lama\r\n                ok = binding_map.Insert(ext_def, binding, BuiltInParameterGroup.PG_TEXT)\r\n\r\n            if not ok:\r\n                try:\r\n                    ok = binding_map.ReInsert(ext_def, binding, GroupTypeId.Text)\r\n                except:\r\n                    ok = binding_map.ReInsert(ext_def, binding, BuiltInParameterGroup.PG_TEXT)\r\n\r\n            TransactionManager.Instance.TransactionTaskDone()\r\n\r\n            result[\"success\"] = bool(ok)\r\n            if ok:\r\n                result[\"message\"] = \"Parameter berhasil di-bind ke {} kategori.\".format(len(result[\"bound_categories\"]))\r\n            else:\r\n                result[\"message\"] = \"Binding gagal. Cek apakah parameter sudah ada dengan mode binding berbeda.\"\r\n\r\n            OUT = result\r\n\r\nexcept Exception as e:\r\n    try:\r\n        TransactionManager.Instance.ForceCloseTransaction()\r\n    except:\r\n        pass\r\n    result[\"message\"] = str(e)\r\n    OUT = result",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "7f1cc989e3f94099a8f154cbeccc0f09",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "8be23ee848c3444c8055d598dafe1ee2",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "0b0a140030f3406f8a1e9fc7867be5d2",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "e3a7128402c0494f9733beca9840ad84",
+          "Name": "IN[2]",
+          "Description": "Input #2",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "3974a2bbce174fed8a5742a38ae9c339",
+          "Name": "IN[3]",
+          "Description": "Input #3",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "2d1efaa4067c4268acea64b6260ffa5a",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.CodeBlockNodeModel, DynamoCore",
+      "Id": "446258f122804e8cb49cb35b85564f06",
+      "NodeType": "CodeBlockNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "07b1d91a62304107a6a223b9c64599c9",
+          "Name": "",
+          "Description": "Value of expression at line 1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Allows for DesignScript code to be authored directly",
+      "Code": "\"Type\";"
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.ZeroTouch.DSFunction, DynamoCore",
+      "Id": "b01bad205aac4911962077c5d7d35588",
+      "NodeType": "FunctionNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "5b2ef4a3fac140ed8c8431d0d695c956",
+          "Name": "string",
+          "Description": "string",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "FunctionSignature": "Revit.Elements.Parameter.SharedParameterFile",
+      "Replication": "Auto",
+      "Description": "Gets the path to the shared parameter file of this document\n\nParameter.SharedParameterFile ( ): string"
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.CodeBlockNodeModel, DynamoCore",
+      "Id": "b2ff81a9092848ad815f36ca6a869f5b",
+      "NodeType": "CodeBlockNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "fd49685c67844082b6728ed2fe5200cd",
+          "Name": "",
+          "Description": "Value of expression at line 1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Allows for DesignScript code to be authored directly",
+      "Code": "\"SPBE\";"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.StringInput, CoreNodeModels",
+      "Id": "0a1697960bb84e9d80194e90c0b000ec",
+      "NodeType": "StringInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "e28eccd0e4a24977b149a42a2c336fe2",
+          "Name": "",
+          "Description": "String",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Creates a string",
+      "InputValue": "SPBE - Kode RAB"
+    },
+    {
+      "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
+      "Code": "# Dynamo Python Script\r\n# IN[0] = shared parameter file path, contoh: r\"C:\\BIM\\Company_SharedParameters.txt\"\r\n# IN[1] = group name di file shared parameter, contoh: \"Data Perencanaan\"\r\n# IN[2] = parameter name, contoh: \"SP_ReferensiStandar\"\r\n# IN[3] = binding mode, isi \"Type\" atau \"Instance\"\r\n\r\nimport clr\r\n\r\nclr.AddReference(\"RevitAPI\")\r\nfrom Autodesk.Revit.DB import *\r\n\r\nclr.AddReference(\"RevitServices\")\r\nfrom RevitServices.Persistence import DocumentManager\r\nfrom RevitServices.Transactions import TransactionManager\r\n\r\ndoc = DocumentManager.Instance.CurrentDBDocument\r\nuiapp = DocumentManager.Instance.CurrentUIApplication\r\napp = uiapp.Application\r\n\r\nsp_file_path = IN[0]\r\ngroup_name = IN[1]\r\nparam_name = IN[2]\r\nbinding_mode = IN[3]\r\n\r\nresult = {\r\n    \"success\": False,\r\n    \"message\": \"\",\r\n    \"bound_categories\": [],\r\n    \"skipped_categories\": []\r\n}\r\n\r\ndef get_external_definition(def_file, group_name, param_name):\r\n    if def_file is None:\r\n        return None, \"Shared parameter file tidak bisa dibuka.\"\r\n    \r\n    target_group = None\r\n    for g in def_file.Groups:\r\n        if g.Name == group_name:\r\n            target_group = g\r\n            break\r\n    \r\n    if target_group is None:\r\n        return None, \"Group '{}' tidak ditemukan.\".format(group_name)\r\n    \r\n    target_def = None\r\n    for d in target_group.Definitions:\r\n        if d.Name == param_name:\r\n            target_def = d\r\n            break\r\n    \r\n    if target_def is None:\r\n        return None, \"Parameter '{}' tidak ditemukan dalam group '{}'.\".format(param_name, group_name)\r\n    \r\n    return target_def, None\r\n\r\ntry:\r\n    # Set shared parameter file aktif\r\n    app.SharedParametersFilename = sp_file_path\r\n    def_file = app.OpenSharedParameterFile()\r\n\r\n    ext_def, err = get_external_definition(def_file, group_name, param_name)\r\n    if err:\r\n        result[\"message\"] = err\r\n        OUT = result\r\n    else:\r\n        cat_set = app.Create.NewCategorySet()\r\n\r\n        # Ambil semua kategori yang boleh diberi project/shared parameter\r\n        for cat in doc.Settings.Categories:\r\n            try:\r\n                # Filter kategori yang valid untuk bound parameter\r\n                if cat and cat.AllowsBoundParameters:\r\n                    # Optional: skip tag categories, analytical, internal, dsb bila mau\r\n                    # if not cat.IsTagCategory:\r\n                    cat_set.Insert(cat)\r\n                    result[\"bound_categories\"].append(cat.Name)\r\n                else:\r\n                    if cat:\r\n                        result[\"skipped_categories\"].append(cat.Name)\r\n            except:\r\n                # Ada beberapa kategori yang kadang error saat dibaca\r\n                try:\r\n                    result[\"skipped_categories\"].append(cat.Name)\r\n                except:\r\n                    pass\r\n\r\n        if cat_set.IsEmpty:\r\n            result[\"message\"] = \"Tidak ada kategori yang valid untuk di-bind.\"\r\n            OUT = result\r\n        else:\r\n            if str(binding_mode).lower() == \"type\":\r\n                binding = app.Create.NewTypeBinding(cat_set)\r\n            else:\r\n                binding = app.Create.NewInstanceBinding(cat_set)\r\n\r\n            binding_map = doc.ParameterBindings\r\n\r\n            TransactionManager.Instance.EnsureInTransaction(doc)\r\n\r\n            # Pilih group tampilan di Properties\r\n            # Untuk Revit baru, GroupTypeId.Text umumnya aman\r\n            ok = False\r\n            try:\r\n                ok = binding_map.Insert(ext_def, binding, GroupTypeId.Text)\r\n            except:\r\n                # fallback untuk API lama\r\n                ok = binding_map.Insert(ext_def, binding, BuiltInParameterGroup.PG_TEXT)\r\n\r\n            if not ok:\r\n                try:\r\n                    ok = binding_map.ReInsert(ext_def, binding, GroupTypeId.Text)\r\n                except:\r\n                    ok = binding_map.ReInsert(ext_def, binding, BuiltInParameterGroup.PG_TEXT)\r\n\r\n            TransactionManager.Instance.TransactionTaskDone()\r\n\r\n            result[\"success\"] = bool(ok)\r\n            if ok:\r\n                result[\"message\"] = \"Parameter berhasil di-bind ke {} kategori.\".format(len(result[\"bound_categories\"]))\r\n            else:\r\n                result[\"message\"] = \"Binding gagal. Cek apakah parameter sudah ada dengan mode binding berbeda.\"\r\n\r\n            OUT = result\r\n\r\nexcept Exception as e:\r\n    try:\r\n        TransactionManager.Instance.ForceCloseTransaction()\r\n    except:\r\n        pass\r\n    result[\"message\"] = str(e)\r\n    OUT = result",
+      "Engine": "CPython3",
+      "VariableInputPorts": true,
+      "Id": "1aa16688cd5e4ad8a32c8df5b0f40610",
+      "NodeType": "PythonScriptNode",
+      "Inputs": [
+        {
+          "Id": "9b944a5230d34d21a154d6606c4bd36e",
+          "Name": "IN[0]",
+          "Description": "Input #0",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "abd2aab3304949c8adfe4acc2e5c48bc",
+          "Name": "IN[1]",
+          "Description": "Input #1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "b0213f8f19344c6ea713d5b16d89d527",
+          "Name": "IN[2]",
+          "Description": "Input #2",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        },
+        {
+          "Id": "269ddd977d7c482db072f3e170efb346",
+          "Name": "IN[3]",
+          "Description": "Input #3",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Outputs": [
+        {
+          "Id": "5babe49807b643929d05cb11ab3f4c60",
+          "Name": "OUT",
+          "Description": "Result of the python script",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Runs an embedded Python script."
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.ZeroTouch.DSFunction, DynamoCore",
+      "Id": "0066c7831a914234a764c9edc04dd2b1",
+      "NodeType": "FunctionNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "f8d008fb3d3f42138f96bb1861e29522",
+          "Name": "string",
+          "Description": "string",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "FunctionSignature": "Revit.Elements.Parameter.SharedParameterFile",
+      "Replication": "Auto",
+      "Description": "Gets the path to the shared parameter file of this document\n\nParameter.SharedParameterFile ( ): string"
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.CodeBlockNodeModel, DynamoCore",
+      "Id": "e09e10106af64461878dfa23d97ec527",
+      "NodeType": "CodeBlockNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "c701c59a53fe40b78a6744d3fd215877",
+          "Name": "",
+          "Description": "Value of expression at line 1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Allows for DesignScript code to be authored directly",
+      "Code": "\"SPBE\";"
+    },
+    {
+      "ConcreteType": "CoreNodeModels.Input.StringInput, CoreNodeModels",
+      "Id": "75bface7320b4d1f829f3e7d835526a4",
+      "NodeType": "StringInputNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "f13b7099f5fa45f1ada7198af2c80343",
+          "Name": "",
+          "Description": "String",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Creates a string",
+      "InputValue": "SPBE - Referensi Standar"
+    },
+    {
+      "ConcreteType": "Dynamo.Graph.Nodes.CodeBlockNodeModel, DynamoCore",
+      "Id": "ee3ea3feacaf47e889e0642141c6698a",
+      "NodeType": "CodeBlockNode",
+      "Inputs": [],
+      "Outputs": [
+        {
+          "Id": "90dc86b928034301b7c5f79b23437de8",
+          "Name": "",
+          "Description": "Value of expression at line 1",
+          "UsingDefaultValue": false,
+          "Level": 2,
+          "UseLevels": false,
+          "KeepListStructure": false
+        }
+      ],
+      "Replication": "Disabled",
+      "Description": "Allows for DesignScript code to be authored directly",
+      "Code": "\"Type\";"
+    }
+  ],
+  "Connectors": [
+    {
+      "Start": "07b1d91a62304107a6a223b9c64599c9",
+      "End": "3974a2bbce174fed8a5742a38ae9c339",
+      "Id": "154b6cb4556546f0918168eef6ca2cd7",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "5b2ef4a3fac140ed8c8431d0d695c956",
+      "End": "8be23ee848c3444c8055d598dafe1ee2",
+      "Id": "ad3ff2597ab346f49d44fc33c7d91b87",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "fd49685c67844082b6728ed2fe5200cd",
+      "End": "0b0a140030f3406f8a1e9fc7867be5d2",
+      "Id": "b9b63042be764047b5c60b86d0f63ba3",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "e28eccd0e4a24977b149a42a2c336fe2",
+      "End": "e3a7128402c0494f9733beca9840ad84",
+      "Id": "396fa34a43f841729fb66e1f32f2f6d9",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "f8d008fb3d3f42138f96bb1861e29522",
+      "End": "9b944a5230d34d21a154d6606c4bd36e",
+      "Id": "c7da4ed3ffc14483a3126b46f67f01e5",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "c701c59a53fe40b78a6744d3fd215877",
+      "End": "abd2aab3304949c8adfe4acc2e5c48bc",
+      "Id": "efd3a1c0134142a2b26344d1c6d58fb4",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "f13b7099f5fa45f1ada7198af2c80343",
+      "End": "b0213f8f19344c6ea713d5b16d89d527",
+      "Id": "1f567f765c784aaf8987ffa33d671788",
+      "IsHidden": "False"
+    },
+    {
+      "Start": "90dc86b928034301b7c5f79b23437de8",
+      "End": "269ddd977d7c482db072f3e170efb346",
+      "Id": "9fb7062352434ac9b8f7dd98f47494a3",
+      "IsHidden": "False"
+    }
+  ],
+  "Dependencies": [],
+  "NodeLibraryDependencies": [
+    {
+      "Name": "SPBE-Shared_Parameters.txt",
+      "ReferenceType": "External",
+      "Nodes": [
+        "b01bad205aac4911962077c5d7d35588",
+        "0066c7831a914234a764c9edc04dd2b1"
+      ]
+    }
+  ],
+  "EnableLegacyPolyCurveBehavior": true,
+  "Thumbnail": "",
+  "GraphDocumentationURL": null,
+  "ExtensionWorkspaceData": [
+    {
+      "ExtensionGuid": "28992e1d-abb9-417f-8b1b-05e053bee670",
+      "Name": "Properties",
+      "Version": "3.3",
+      "Data": {}
+    },
+    {
+      "ExtensionGuid": "DFBD9CC0-DB40-457A-939E-8C8555555A9D",
+      "Name": "Generative Design",
+      "Version": "8.2",
+      "Data": {}
+    }
+  ],
+  "Author": "",
+  "Linting": {
+    "activeLinter": "None",
+    "activeLinterId": "7b75fb44-43fd-4631-a878-29f4d5d8399a",
+    "warningCount": 0,
+    "errorCount": 0
+  },
+  "Bindings": [],
+  "View": {
+    "Dynamo": {
+      "ScaleFactor": 1.0,
+      "HasRunWithoutCrash": true,
+      "IsVisibleInDynamoLibrary": true,
+      "Version": "3.3.0.6316",
+      "RunType": "Manual",
+      "RunPeriod": "1000"
+    },
+    "Camera": {
+      "Name": "_Background Preview",
+      "EyeX": -17.0,
+      "EyeY": 24.0,
+      "EyeZ": 50.0,
+      "LookX": 12.0,
+      "LookY": -13.0,
+      "LookZ": -58.0,
+      "UpX": 0.0,
+      "UpY": 1.0,
+      "UpZ": 0.0
+    },
+    "ConnectorPins": [],
+    "NodeViews": [
+      {
+        "Id": "7f1cc989e3f94099a8f154cbeccc0f09",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 612.0,
+        "Y": 372.0
+      },
+      {
+        "Id": "446258f122804e8cb49cb35b85564f06",
+        "Name": "Code Block",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 291.0,
+        "Y": 675.0
+      },
+      {
+        "Id": "b01bad205aac4911962077c5d7d35588",
+        "Name": "Parameter.SharedParameterFile",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 189.0,
+        "Y": 284.0
+      },
+      {
+        "Id": "b2ff81a9092848ad815f36ca6a869f5b",
+        "Name": "Code Block",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 349.0,
+        "Y": 406.0
+      },
+      {
+        "Id": "0a1697960bb84e9d80194e90c0b000ec",
+        "Name": "String",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 292.0,
+        "Y": 544.0
+      },
+      {
+        "Id": "1aa16688cd5e4ad8a32c8df5b0f40610",
+        "Name": "Python Script",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 1218.5,
+        "Y": 321.0
+      },
+      {
+        "Id": "0066c7831a914234a764c9edc04dd2b1",
+        "Name": "Parameter.SharedParameterFile",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 795.5,
+        "Y": 233.0
+      },
+      {
+        "Id": "e09e10106af64461878dfa23d97ec527",
+        "Name": "Code Block",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 955.5,
+        "Y": 355.0
+      },
+      {
+        "Id": "75bface7320b4d1f829f3e7d835526a4",
+        "Name": "String",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 898.5,
+        "Y": 493.0
+      },
+      {
+        "Id": "ee3ea3feacaf47e889e0642141c6698a",
+        "Name": "Code Block",
+        "IsSetAsInput": false,
+        "IsSetAsOutput": false,
+        "Excluded": false,
+        "ShowGeometry": true,
+        "X": 897.5,
+        "Y": 624.0
+      }
+    ],
+    "Annotations": [],
+    "X": 0.0,
+    "Y": 0.0,
+    "Zoom": 1.0
+  }
+}
