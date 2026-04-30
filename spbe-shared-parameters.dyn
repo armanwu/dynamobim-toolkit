@@ -2,7 +2,7 @@
   "Uuid": "ae05c003-7bb6-4adb-a644-c3e9f7cd2d9d",
   "IsCustomNode": false,
   "Description": "",
-  "Name": "inject-shared-parameters",
+  "Name": "spbe-shared-parameters",
   "ElementResolver": {
     "ResolutionMap": {}
   },
@@ -146,7 +146,7 @@
       ],
       "Replication": "Disabled",
       "Description": "Creates a string",
-      "InputValue": "SPBE - Kode RAB"
+      "InputValue": "SPBE-Kode_RAB"
     },
     {
       "ConcreteType": "PythonNodeModels.PythonNode, PythonNodeModels",
@@ -265,7 +265,7 @@
       ],
       "Replication": "Disabled",
       "Description": "Creates a string",
-      "InputValue": "SPBE - Referensi Standar"
+      "InputValue": "SPBE-Referensi_Standar"
     },
     {
       "ConcreteType": "Dynamo.Graph.Nodes.CodeBlockNodeModel, DynamoCore",
